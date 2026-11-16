@@ -1,0 +1,26 @@
+# Personal learning notes (local only)
+learn/
+
+# OS / editor
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Node / frontend
+node_modules/
+dist/
+*.log
+
+# Rust / Tauri
+target/
+src-tauri/target/
+
+# Native build output
+build/
+build-*/
+*.xcframework/
+
+# Models (downloaded at runtime, never committed)
+models/
+*.gguf
