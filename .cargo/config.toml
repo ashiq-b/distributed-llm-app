@@ -1,0 +1,4 @@
+[env]
+# One minimum macOS version for both rustc's link step and the CMake-built
+# llama.cpp objects (avoids "built for newer macOS" link warnings).
+MACOSX_DEPLOYMENT_TARGET = "14.0"

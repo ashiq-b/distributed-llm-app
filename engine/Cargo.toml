@@ -1,0 +1,13 @@
+[package]
+name = "dl-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Safe Rust API over llama.cpp (pinned) + a thin C wrapper: RPC worker, host, stats"
+publish = false
+links = "dl_engine"
+
+[dependencies]
+thiserror = "2"
+
+[build-dependencies]
+cmake = "0.1"
