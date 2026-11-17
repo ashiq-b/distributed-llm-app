@@ -12,17 +12,18 @@ Prove that one small LLM can be **genuinely split** across ordinary consumer dev
 - iPhone ↔ Mac split working in both directions (P0).
 - Android joining as worker and host from the same codebase (P1).
 - A polished, functional UI: discovery, model library, chat, split view.
-- 2–3 current GGUF models under 3B parameters.
+- Three current GGUF models under 3B: LFM3-1.7B, Qwen3.5-2B, Qwen3.5-0.8B.
+- A static project page on Vercel (P1).
 
 **Non-goals**
 - Throughput or latency. Distributed over Wi‑Fi is expected to be slower than a single device.
 - Internet or WAN operation, authentication, encryption.
 - App Store / Play Store distribution.
-- Windows and Linux builds (possible later; untested in v1).
+- Windows and Linux builds in v1. Keep code portable (no macOS-only shortcuts outside platform glue) so they can follow.
 - Multi-user or multi-session hosting.
 
 **Anti-goals** (failure even if the demo "works")
-- Any faked or simulated distribution: canned numbers, a worker that isn't really holding tensors, or a split view that isn't driven by llama.cpp's own data.
+- Any faked or simulated data, anywhere: canned numbers, mock devices, placeholder stats, a worker that isn't really holding tensors, or a split view not driven by llama.cpp's own data. This is a real product. Empty states are shown as empty, unknown values as "unknown".
 - Spawning external processes on any platform. It doesn't work on iOS, and we want one code path everywhere.
 - Patching llama.cpp's source. We pin and wrap it; we don't fork it.
 
@@ -149,6 +150,13 @@ Visual design is produced at implementation with a dedicated design pass. The ba
 
 Common: `LLAMA_CURL=OFF`, `BUILD_SHARED_LIBS=OFF`. llama.cpp is vendored as a git submodule at one pinned commit.
 
+### 5.5 Project page (Vercel)
+
+- A static site in `site/` (separate from the app), deployed to Vercel.
+- Contents: overview, how it works, the recorded demo video of the real app, real screenshots, download links (macOS app, Android APK; iOS via Xcode instructions), setup steps, limitations.
+- It runs no inference and shows no simulated UI, because browsers can't open the raw TCP connections llama.cpp RPC needs.
+- Every asset on it is captured from the real app.
+
 ## 6. Data flow: iPhone hosts, Mac works
 
 1. Mac: the user taps **Worker**. The wrapper starts the RPC server on `0.0.0.0:50052`, and discovery advertises `_distllm._tcp`.
@@ -174,7 +182,7 @@ Common: `LLAMA_CURL=OFF`, `BUILD_SHARED_LIBS=OFF`. llama.cpp is vendored as a gi
 ## 8. Left to the builder
 
 - Exact llama.cpp commit to pin (latest that builds cleanly for iOS + Android with RPC).
-- Final model picks (verified to load and chat correctly at that commit).
+- Confirm each catalog model (LFM3-1.7B, Qwen3.5-2B, Qwen3.5-0.8B; text-only use, no vision projector) loads and chats correctly **in split mode** at the pinned commit; replace any that fail with the next-newest model under 3B.
 - Exact wrapper internals against the pinned API.
 - Visual design details.
 - Whether the iOS increased-memory-limit entitlement is usable with a free account. If not, the iPhone hosts the smaller models only.
