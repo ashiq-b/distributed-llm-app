@@ -2,10 +2,14 @@
 //! and our thin C wrapper in engine/cpp.
 
 mod ffi;
+mod host;
+mod stats;
 mod worker;
 
 use std::ffi::CStr;
 
+pub use host::{Host, CONNECT_TIMEOUT};
+pub use stats::DeviceShare;
 pub use worker::{Worker, WorkerConfig, WorkerStatus};
 
 #[derive(Debug, thiserror::Error)]
@@ -18,6 +22,12 @@ pub enum EngineError {
     NoDevice,
     #[error("{0}")]
     Start(String),
+    #[error("cannot reach worker {0}")]
+    Connect(String),
+    #[error("{0}")]
+    Load(String),
+    #[error("not enough memory on a device to hold its share of the model")]
+    OutOfMemory,
 }
 
 /// RPC protocol version of the linked llama.cpp, e.g. "10.0.0".

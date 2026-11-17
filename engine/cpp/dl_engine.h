@@ -13,6 +13,8 @@ extern "C" {
 #define DL_ERR_ALREADY_RUNNING  -3   // one RPC worker per process
 #define DL_ERR_START            -4   // server exited or never started listening
 #define DL_ERR_NO_DEVICE        -5   // no usable compute device
+#define DL_ERR_LOAD             -6   // model failed to load (see dl_last_error)
+#define DL_ERR_OOM              -7   // a device could not allocate its share
 
 typedef struct {
     int       running;       // 1 while the RPC server is accepting connections
@@ -35,6 +37,35 @@ const char * dl_rpc_proto_version(void);
 
 // Free memory (MiB) of the default compute device (GPU if present, else CPU); -1 if unknown.
 long long dl_device_free_mb(void);
+
+// ---- Host ---------------------------------------------------------------
+
+typedef void (*dl_progress_cb)(float frac, void * user);
+
+typedef struct {
+    char   name[64];       // device description, e.g. "Apple M5"
+    char   endpoint[64];   // "host:port" for RPC devices, "" for local
+    int    is_remote;      // 1 = RPC worker, 0 = this device
+    int    layer_first;    // inclusive; -1 if llama.cpp did not report it
+    int    layer_last;     // inclusive; index == n_layer means the output layer
+    double buffer_mib;     // model weights held, as reported by llama.cpp; < 0 if unknown
+} dl_device_share_t;
+
+// Load a model split across this device's GPU and the given RPC workers
+// (endpoints "host:port"; callers must check they are reachable first, since
+// llama.cpp aborts on unreachable RPC servers). tensor_split may be NULL
+// (llama.cpp splits by free memory) or hold one weight per device in load
+// order: RPC devices first, then local. Unloads any previous model.
+int dl_host_load(const char * model_path, const char ** endpoints, int n_endpoints,
+                 const float * tensor_split, dl_progress_cb cb, void * user);
+
+// Per-device share of the loaded model, in load order. Returns the count written.
+int dl_stats_devices(dl_device_share_t * out, int max);
+
+void dl_host_unload(void);
+
+// Message for the last DL_ERR_LOAD / DL_ERR_OOM. Valid until the next load.
+const char * dl_last_error(void);
 
 #ifdef __cplusplus
 }

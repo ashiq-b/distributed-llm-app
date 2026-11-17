@@ -1,5 +1,6 @@
 //! Raw bindings to engine/cpp/dl_engine.h. Keep in sync with the header.
-use std::os::raw::{c_char, c_int, c_longlong};
+#![allow(non_camel_case_types, dead_code)]
+use std::os::raw::{c_char, c_double, c_float, c_int, c_longlong, c_void};
 
 pub const DL_OK: c_int = 0;
 pub const DL_ERR_ARGS: c_int = -1;
@@ -7,6 +8,20 @@ pub const DL_ERR_BIND: c_int = -2;
 pub const DL_ERR_ALREADY_RUNNING: c_int = -3;
 pub const DL_ERR_START: c_int = -4;
 pub const DL_ERR_NO_DEVICE: c_int = -5;
+pub const DL_ERR_LOAD: c_int = -6;
+pub const DL_ERR_OOM: c_int = -7;
+
+pub type dl_progress_cb = Option<unsafe extern "C" fn(frac: c_float, user: *mut c_void)>;
+
+#[repr(C)]
+pub struct dl_device_share_t {
+    pub name: [c_char; 64],
+    pub endpoint: [c_char; 64],
+    pub is_remote: c_int,
+    pub layer_first: c_int,
+    pub layer_last: c_int,
+    pub buffer_mib: c_double,
+}
 
 #[repr(C)]
 pub struct dl_worker_status_t {
@@ -21,4 +36,16 @@ extern "C" {
     pub fn dl_worker_status(out: *mut dl_worker_status_t) -> c_int;
     pub fn dl_rpc_proto_version() -> *const c_char;
     pub fn dl_device_free_mb() -> c_longlong;
+
+    pub fn dl_host_load(
+        model_path: *const c_char,
+        endpoints: *const *const c_char,
+        n_endpoints: c_int,
+        tensor_split: *const c_float,
+        cb: dl_progress_cb,
+        user: *mut c_void,
+    ) -> c_int;
+    pub fn dl_stats_devices(out: *mut dl_device_share_t, max: c_int) -> c_int;
+    pub fn dl_host_unload();
+    pub fn dl_last_error() -> *const c_char;
 }

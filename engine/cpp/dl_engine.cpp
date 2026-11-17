@@ -1,7 +1,9 @@
 #include "dl_engine.h"
+#include "dl_stats.h"
 
 #include "ggml-backend.h"
 #include "ggml-rpc.h"
+#include "llama.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -152,4 +154,148 @@ extern "C" const char * dl_rpc_proto_version(void) {
 extern "C" long long dl_device_free_mb(void) {
     std::vector<ggml_backend_dev_t> devs = default_devices();
     return devs.empty() ? -1 : free_mib(devs[0]);
+}
+
+// ---- Host -------------------------------------------------------------------
+
+namespace {
+
+struct host_device {
+    ggml_backend_dev_t dev;
+    std::string        endpoint;   // empty for local devices
+};
+
+std::mutex               g_host_mu;
+llama_model *            g_model = nullptr;
+std::vector<host_device> g_host_devs;
+std::string              g_last_error;
+
+void log_cb(enum ggml_log_level level, const char * text, void * /*user*/) {
+    dl_stats::feed(text);
+    if (level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR) {
+        std::fputs(text, stderr);
+        if (level == GGML_LOG_LEVEL_ERROR) {
+            std::lock_guard<std::mutex> lk(g_mu);
+            g_last_error += text;
+        }
+    }
+}
+
+void ensure_backend() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        llama_log_set(log_cb, nullptr);
+        llama_backend_init();
+    });
+}
+
+struct progress_ctx { dl_progress_cb cb; void * user; };
+
+bool progress_trampoline(float frac, void * user) {
+    auto * p = static_cast<progress_ctx *>(user);
+    if (p->cb) p->cb(frac, p->user);
+    return true;
+}
+
+void unload_locked() {
+    if (g_model) {
+        llama_model_free(g_model);
+        g_model = nullptr;
+    }
+    g_host_devs.clear();
+}
+
+} // namespace
+
+extern "C" int dl_host_load(const char * model_path, const char ** endpoints, int n_endpoints,
+                            const float * tensor_split, dl_progress_cb cb, void * user) {
+    if (!model_path || n_endpoints < 0 || (n_endpoints > 0 && !endpoints)) return DL_ERR_ARGS;
+    ensure_backend();
+
+    std::lock_guard<std::mutex> lk(g_host_mu);
+    unload_locked();
+    { std::lock_guard<std::mutex> e(g_mu); g_last_error.clear(); }
+
+    // Same order as llama.cpp's default device selection: RPC servers first, local GPUs last
+    // (so the host keeps the output layer).
+    std::vector<host_device> devs;
+    for (int i = 0; i < n_endpoints; i++) {
+        ggml_backend_reg_t reg = ggml_backend_rpc_add_server(endpoints[i]);
+        if (!reg) {
+            std::lock_guard<std::mutex> e(g_mu);
+            g_last_error = std::string("cannot add RPC server ") + endpoints[i];
+            return DL_ERR_LOAD;
+        }
+        for (size_t d = 0; d < ggml_backend_reg_dev_count(reg); d++) {
+            devs.push_back({ggml_backend_reg_dev_get(reg, d), endpoints[i]});
+        }
+    }
+    for (ggml_backend_dev_t dev : default_devices()) {
+        if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) devs.push_back({dev, ""});
+    }
+
+    std::vector<ggml_backend_dev_t> dev_list;
+    for (auto & d : devs) dev_list.push_back(d.dev);
+    dev_list.push_back(nullptr);
+
+    progress_ctx pctx{cb, user};
+    llama_model_params params = llama_model_default_params();
+    params.devices                     = dev_list.data();
+    params.n_gpu_layers                = 999;
+    params.split_mode                  = LLAMA_SPLIT_MODE_LAYER;
+    params.tensor_split                = tensor_split;
+    params.progress_callback           = progress_trampoline;
+    params.progress_callback_user_data = &pctx;
+
+    dl_stats::reset();
+    llama_model * model = llama_model_load_from_file(model_path, params);
+    if (!model) {
+        std::lock_guard<std::mutex> e(g_mu);
+        const bool oom = g_last_error.find("allocate") != std::string::npos;
+        if (g_last_error.empty()) g_last_error = std::string("failed to load ") + model_path;
+        return oom ? DL_ERR_OOM : DL_ERR_LOAD;
+    }
+    g_model     = model;
+    g_host_devs = std::move(devs);
+    return DL_OK;
+}
+
+extern "C" int dl_stats_devices(dl_device_share_t * out, int max) {
+    if (!out || max <= 0) return 0;
+    std::lock_guard<std::mutex> lk(g_host_mu);
+    if (!g_model) return 0;
+    const dl_stats::snapshot snap = dl_stats::get();
+
+    int n = 0;
+    for (const auto & d : g_host_devs) {
+        if (n >= max) break;
+        dl_device_share_t & s = out[n++];
+        std::memset(&s, 0, sizeof(s));
+        const std::string dev_name = ggml_backend_dev_name(d.dev);
+        std::snprintf(s.name, sizeof(s.name), "%s", ggml_backend_dev_description(d.dev));
+        std::snprintf(s.endpoint, sizeof(s.endpoint), "%s", d.endpoint.c_str());
+        s.is_remote   = d.endpoint.empty() ? 0 : 1;
+        s.layer_first = -1;
+        s.layer_last  = -1;
+        for (const auto & [layer, name] : snap.layer_dev) {
+            if (name != dev_name) continue;
+            if (s.layer_first < 0 || layer < s.layer_first) s.layer_first = layer;
+            if (layer > s.layer_last) s.layer_last = layer;
+        }
+        auto it = snap.model_mib.find(dev_name);
+        s.buffer_mib = it == snap.model_mib.end() ? -1.0 : it->second;
+    }
+    return n;
+}
+
+extern "C" void dl_host_unload(void) {
+    std::lock_guard<std::mutex> lk(g_host_mu);
+    unload_locked();
+}
+
+extern "C" const char * dl_last_error(void) {
+    static thread_local std::string copy;
+    std::lock_guard<std::mutex> lk(g_mu);
+    copy = g_last_error;
+    return copy.c_str();
 }
