@@ -1,0 +1,4 @@
+# Pinned llama.cpp — every platform build must use exactly this commit.
+tag=v1.0.0
+commit=b1b770d90d94cad9e9ea5b993bdbc383a522fb28
+rpc_proto=10.0.0
