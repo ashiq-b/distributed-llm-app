@@ -10,6 +10,16 @@ pub const DL_ERR_START: c_int = -4;
 pub const DL_ERR_NO_DEVICE: c_int = -5;
 pub const DL_ERR_LOAD: c_int = -6;
 pub const DL_ERR_OOM: c_int = -7;
+pub const DL_ERR_WORKER_LOST: c_int = -8;
+pub const DL_ERR_NOT_LOADED: c_int = -9;
+pub const DL_ERR_CONTEXT: c_int = -10;
+pub const DL_ERR_DECODE: c_int = -11;
+
+pub const DL_STOP_EOS: c_int = 0;
+pub const DL_STOP_CANCELLED: c_int = 1;
+pub const DL_STOP_MAX_TOKENS: c_int = 2;
+
+pub type dl_token_cb = Option<unsafe extern "C" fn(piece: *const c_char, user: *mut c_void) -> c_int>;
 
 pub type dl_progress_cb = Option<unsafe extern "C" fn(frac: c_float, user: *mut c_void)>;
 
@@ -48,4 +58,17 @@ extern "C" {
     pub fn dl_stats_devices(out: *mut dl_device_share_t, max: c_int) -> c_int;
     pub fn dl_host_unload();
     pub fn dl_last_error() -> *const c_char;
+
+    pub fn dl_host_generate(
+        roles: *const *const c_char,
+        contents: *const *const c_char,
+        n_messages: c_int,
+        max_tokens: c_int,
+        temperature: c_float,
+        seed: std::os::raw::c_uint,
+        cb: dl_token_cb,
+        user: *mut c_void,
+        n_tokens: *mut c_int,
+    ) -> c_int;
+    pub fn dl_host_cancel();
 }

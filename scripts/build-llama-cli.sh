@@ -4,6 +4,7 @@
 # Used for command-line spikes and as the external RPC worker in engine tests.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+"$ROOT/scripts/apply-llama-patches.sh"
 
 cmake -S "$ROOT/engine/llama.cpp" -B "$ROOT/engine/build-cli" \
   -DGGML_RPC=ON \

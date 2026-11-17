@@ -1,54 +1,9 @@
-use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+mod common;
+
 use std::time::{Duration, Instant};
 
+use common::{test_model, RpcServer};
 use dl_engine::{EngineError, Host};
-
-/// A real llama.cpp RPC worker in a separate process (built by scripts/build-llama-cli.sh).
-struct RpcServer {
-    child: Child,
-    port: u16,
-}
-
-impl RpcServer {
-    fn spawn() -> RpcServer {
-        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let bin = concat!(env!("CARGO_MANIFEST_DIR"), "/build-cli/bin/ggml-rpc-server");
-        let child = Command::new(bin)
-            .args(["-H", "127.0.0.1", "-p", &port.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn ggml-rpc-server (run scripts/build-llama-cli.sh)");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(Instant::now() < deadline, "ggml-rpc-server did not start");
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        RpcServer { child, port }
-    }
-    fn endpoint(&self) -> String {
-        format!("127.0.0.1:{}", self.port)
-    }
-}
-
-impl Drop for RpcServer {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn test_model() -> Option<PathBuf> {
-    match std::env::var("DL_TEST_MODEL") {
-        Ok(p) => Some(PathBuf::from(p)),
-        Err(_) => {
-            eprintln!("skipping: DL_TEST_MODEL not set");
-            None
-        }
-    }
-}
 
 #[test]
 fn split_puts_tensors_on_rpc_device() {
@@ -95,5 +50,21 @@ fn load_reports_missing_model_file() {
     match Host::load(std::path::Path::new("/nonexistent/model.gguf"), &[], None, |_| {}) {
         Err(EngineError::Load(_)) => {}
         other => panic!("expected Err(Load), got {:?}", other.map(|_| ())),
+    }
+}
+
+#[test]
+fn split_across_two_workers_reports_each_share() {
+    let Some(model) = test_model() else { return };
+    let (a, b) = (RpcServer::spawn(), RpcServer::spawn());
+    let host = Host::load(&model, &[a.endpoint(), b.endpoint()], None, |_| {}).expect("load across two workers");
+    let shares = host.device_shares();
+    eprintln!("{shares:#?}");
+
+    assert_eq!(shares.len(), 3, "two RPC workers + local GPU");
+    for ep in [a.endpoint(), b.endpoint()] {
+        let s = shares.iter().find(|s| s.endpoint.as_deref() == Some(ep.as_str())).expect("share per worker");
+        assert!(s.buffer_mib.unwrap_or(0.0) > 0.0, "{ep} must report the weights it holds");
+        assert!(s.layers.is_some(), "{ep} must report its layers");
     }
 }

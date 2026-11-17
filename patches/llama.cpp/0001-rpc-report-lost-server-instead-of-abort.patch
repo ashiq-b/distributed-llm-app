@@ -1,0 +1,147 @@
+diff --git a/ggml/include/ggml-rpc.h b/ggml/include/ggml-rpc.h
+index da1d4e1..e13a7d2 100644
+--- a/ggml/include/ggml-rpc.h
++++ b/ggml/include/ggml-rpc.h
+@@ -33,6 +33,12 @@ GGML_BACKEND_API void ggml_backend_rpc_start_server(
+         ggml_backend_dev_t * devices);
+ 
+ GGML_BACKEND_API ggml_backend_reg_t ggml_backend_rpc_reg(void);
++
++// [distllm patch] A lost RPC server is reported instead of aborting the process.
++// Returns true if any client connection failed since the last clear, and copies
++// the first failed endpoint ("host:port") into endpoint_out (may be NULL).
++GGML_BACKEND_API bool ggml_backend_rpc_get_failure(char * endpoint_out, size_t size);
++GGML_BACKEND_API void ggml_backend_rpc_clear_failure(void);
+ GGML_BACKEND_API ggml_backend_reg_t ggml_backend_rpc_add_server(const char * endpoint);
+ 
+ #ifdef  __cplusplus
+diff --git a/ggml/src/ggml-rpc/ggml-rpc.cpp b/ggml/src/ggml-rpc/ggml-rpc.cpp
+index e4a84cb..1bb1be8 100644
+--- a/ggml/src/ggml-rpc/ggml-rpc.cpp
++++ b/ggml/src/ggml-rpc/ggml-rpc.cpp
+@@ -566,8 +566,40 @@ private:
+     std::atomic_uint busy_spin_users = 0;
+     std::atomic_bool running;
+     std::thread      thread;
++
++public:
++    // [distllm patch] set when the connection to the server is lost
++    std::atomic_bool failed{false};
++    std::string      endpoint;
+ };
+ 
++// [distllm patch] process-wide record of the first lost RPC server
++static std::mutex  g_rpc_failure_mu;
++static bool        g_rpc_failed = false;
++static std::string g_rpc_failed_endpoint;
++
++static void rpc_record_failure(const std::string & endpoint) {
++    std::lock_guard<std::mutex> lock(g_rpc_failure_mu);
++    if (!g_rpc_failed) {
++        g_rpc_failed          = true;
++        g_rpc_failed_endpoint = endpoint;
++    }
++}
++
++bool ggml_backend_rpc_get_failure(char * endpoint_out, size_t size) {
++    std::lock_guard<std::mutex> lock(g_rpc_failure_mu);
++    if (g_rpc_failed && endpoint_out && size > 0) {
++        snprintf(endpoint_out, size, "%s", g_rpc_failed_endpoint.c_str());
++    }
++    return g_rpc_failed;
++}
++
++void ggml_backend_rpc_clear_failure(void) {
++    std::lock_guard<std::mutex> lock(g_rpc_failure_mu);
++    g_rpc_failed = false;
++    g_rpc_failed_endpoint.clear();
++}
++
+ static void rpc_dispatcher_trampoline(rpc_dispatcher * dispatcher)
+ {
+     dispatcher->work();
+@@ -656,6 +688,7 @@ bool rpc_dispatcher::start(const std::string & endpoint) {
+         return false;
+     }
+ 
++    this->endpoint = endpoint;
+     sock = socket_t::connect(host.c_str(), port);
+     if (sock == nullptr) {
+         LOG_ERROR("Failed to connect to %s\n", endpoint.c_str());
+@@ -691,12 +724,20 @@ void rpc_dispatcher::work() {
+                      rpc_log_format_size(msg_ptr->input_size).c_str(), rpc_log_format_size(msg_ptr->output_size).c_str());
+             const bool trace = rpc_log_debug_level() >= 3;
+             const auto t0 = std::chrono::steady_clock::now();
+-            if (msg_ptr->output) {
+-                bool status = send_rpc_cmd(sock, msg_ptr->cmd, msg_ptr->input.get(), msg_ptr->input_size, msg_ptr->output, msg_ptr->output_size);
+-                RPC_STATUS_ASSERT(status);
+-            } else {
+-                bool status = send_rpc_cmd_payload(sock, msg_ptr->cmd, msg_ptr->input.get(), msg_ptr->input_size, msg_ptr->payload, msg_ptr->payload_size);
+-                RPC_STATUS_ASSERT(status);
++            // [distllm patch] on a lost connection, record it and complete the remaining
++            // messages without sending, instead of aborting the whole process
++            if (!failed) {
++                bool status;
++                if (msg_ptr->output) {
++                    status = send_rpc_cmd(sock, msg_ptr->cmd, msg_ptr->input.get(), msg_ptr->input_size, msg_ptr->output, msg_ptr->output_size);
++                } else {
++                    status = send_rpc_cmd_payload(sock, msg_ptr->cmd, msg_ptr->input.get(), msg_ptr->input_size, msg_ptr->payload, msg_ptr->payload_size);
++                }
++                if (!status) {
++                    LOG_ERROR("RPC server %s disconnected (%s failed)\n", endpoint.c_str(), rpc_cmd_name(msg_ptr->cmd));
++                    failed = true;
++                    rpc_record_failure(endpoint);
++                }
+             }
+             if (trace) {
+                 const std::chrono::duration<double, std::milli> elapsed = std::chrono::steady_clock::now() - t0;
+@@ -726,7 +767,7 @@ static std::shared_ptr<rpc_dispatcher> get_dispatcher(const std::string & endpoi
+ 
+     auto it = dispatchers.find(endpoint);
+     if (it != dispatchers.end()) {
+-        if (auto dispatcher = it->second.lock()) {
++        if (auto dispatcher = it->second.lock(); dispatcher && !dispatcher->failed) {  // [distllm patch]
+             return dispatcher;
+         }
+     }
+diff --git a/ggml/src/ggml-rpc/transport.cpp b/ggml/src/ggml-rpc/transport.cpp
+index c7d9f53..9e57678 100644
+--- a/ggml/src/ggml-rpc/transport.cpp
++++ b/ggml/src/ggml-rpc/transport.cpp
+@@ -717,6 +717,28 @@ static bool set_no_delay(sockfd_t sockfd) {
+     return ret == 0;
+ }
+ 
++// [distllm patch] detect a peer that vanished without closing the connection
++// (Wi-Fi drop, device asleep): ~5 s idle, then 3 probes 2 s apart.
++static void set_keepalive(sockfd_t sockfd) {
++#ifndef _WIN32
++    int on = 1, idle = 5, intvl = 2, cnt = 3;
++    setsockopt(sockfd, SOL_SOCKET, SO_KEEPALIVE, (char *)&on, sizeof(on));
++#if defined(__APPLE__)
++    setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPALIVE, (char *)&idle, sizeof(idle));
++#elif defined(TCP_KEEPIDLE)
++    setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPIDLE, (char *)&idle, sizeof(idle));
++#endif
++#if defined(TCP_KEEPINTVL)
++    setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPINTVL, (char *)&intvl, sizeof(intvl));
++#endif
++#if defined(TCP_KEEPCNT)
++    setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPCNT, (char *)&cnt, sizeof(cnt));
++#endif
++#else
++    (void) sockfd;
++#endif
++}
++
+ static bool set_reuse_addr(sockfd_t sockfd) {
+     int flag = 1;
+     int ret = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char *)&flag, sizeof(int));
+@@ -773,6 +795,7 @@ socket_ptr socket_t::connect(const char * host, int port) {
+         LOG_ERROR("Failed to set TCP_NODELAY\n");
+         return nullptr;
+     }
++    set_keepalive(sockfd);  // [distllm patch]
+     struct sockaddr_in addr;
+     addr.sin_family = AF_INET;
+     addr.sin_port = htons(port);

@@ -8,7 +8,7 @@ mod worker;
 
 use std::ffi::CStr;
 
-pub use host::{Host, CONNECT_TIMEOUT};
+pub use host::{ChatMessage, ChatRole, GenParams, GenSummary, Host, StopReason, CONNECT_TIMEOUT};
 pub use stats::DeviceShare;
 pub use worker::{Worker, WorkerConfig, WorkerStatus};
 
@@ -28,6 +28,12 @@ pub enum EngineError {
     Load(String),
     #[error("not enough memory on a device to hold its share of the model")]
     OutOfMemory,
+    #[error("lost connection to worker {0}")]
+    WorkerLost(String),
+    #[error("{0}")]
+    ContextFull(String),
+    #[error("generation failed: {0}")]
+    Generate(String),
 }
 
 /// RPC protocol version of the linked llama.cpp, e.g. "10.0.0".

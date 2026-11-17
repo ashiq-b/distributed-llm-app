@@ -4,6 +4,13 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     println!("cargo:rerun-if-changed=cpp");
+    println!("cargo:rerun-if-changed=../patches/llama.cpp");
+
+    // Our documented llama.cpp patches (patches/llama.cpp/README.md); idempotent.
+    let status = std::process::Command::new("../scripts/apply-llama-patches.sh")
+        .status()
+        .expect("run scripts/apply-llama-patches.sh");
+    assert!(status.success(), "applying llama.cpp patches failed");
     println!("cargo:rerun-if-changed=LLAMA_CPP_VERSION");
 
     // llama.cpp in Debug is far too slow to be useful, so always build Release.

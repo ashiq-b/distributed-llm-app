@@ -6,7 +6,8 @@
 namespace dl_stats {
 
 struct snapshot {
-    std::map<std::string, double> model_mib;   // device name (e.g. "MTL0", "RPC0") -> MiB of weights
+    std::map<std::string, double> model_mib;   // buffer owner -> MiB of weights: local device name ("MTL0")
+                                               // or RPC buffer key "RPC<index on server>[host:port]"
     std::map<int, std::string>    layer_dev;   // layer index -> device name
 };
 

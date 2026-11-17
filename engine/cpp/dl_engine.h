@@ -15,6 +15,15 @@ extern "C" {
 #define DL_ERR_NO_DEVICE        -5   // no usable compute device
 #define DL_ERR_LOAD             -6   // model failed to load (see dl_last_error)
 #define DL_ERR_OOM              -7   // a device could not allocate its share
+#define DL_ERR_WORKER_LOST      -8   // an RPC worker disconnected (endpoint in dl_last_error)
+#define DL_ERR_NOT_LOADED       -9   // no model loaded
+#define DL_ERR_CONTEXT         -10   // conversation does not fit the context window
+#define DL_ERR_DECODE          -11   // llama_decode failed (see dl_last_error)
+
+// dl_host_generate stop reasons (>= 0)
+#define DL_STOP_EOS              0
+#define DL_STOP_CANCELLED        1
+#define DL_STOP_MAX_TOKENS       2
 
 typedef struct {
     int       running;       // 1 while the RPC server is accepting connections
@@ -64,7 +73,23 @@ int dl_stats_devices(dl_device_share_t * out, int max);
 
 void dl_host_unload(void);
 
-// Message for the last DL_ERR_LOAD / DL_ERR_OOM. Valid until the next load.
+// Called with each generated piece of UTF-8 text (a piece may end mid-character).
+// Return 0 to continue, non-zero to stop.
+typedef int (*dl_token_cb)(const char * piece, void * user);
+
+// Run a chat turn on the loaded model. roles/contents are parallel arrays
+// ("system" | "user" | "assistant"). The model's chat template is applied and the
+// KV cache is reset each call. temperature <= 0 means greedy. On return,
+// *n_tokens (may be NULL) holds the number of tokens generated.
+// Returns DL_STOP_* (>= 0) or a DL_ERR_* (< 0).
+int dl_host_generate(const char ** roles, const char ** contents, int n_messages,
+                     int max_tokens, float temperature, unsigned int seed,
+                     dl_token_cb cb, void * user, int * n_tokens);
+
+// Ask a running dl_host_generate to stop after the current token. Thread-safe.
+void dl_host_cancel(void);
+
+// Message for the last error. Valid until the next call that sets it.
 const char * dl_last_error(void);
 
 #ifdef __cplusplus

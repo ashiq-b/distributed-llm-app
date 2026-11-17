@@ -163,10 +163,16 @@ namespace {
 struct host_device {
     ggml_backend_dev_t dev;
     std::string        endpoint;   // empty for local devices
+    size_t             index = 0;  // device index on its RPC server
 };
+
+constexpr uint32_t       N_CTX   = 4096;
+constexpr uint32_t       N_BATCH = 512;
 
 std::mutex               g_host_mu;
 llama_model *            g_model = nullptr;
+llama_context *          g_ctx   = nullptr;
+std::atomic<bool>        g_cancel{false};
 std::vector<host_device> g_host_devs;
 std::string              g_last_error;
 
@@ -197,7 +203,16 @@ bool progress_trampoline(float frac, void * user) {
     return true;
 }
 
+void set_last_error(const std::string & msg) {
+    std::lock_guard<std::mutex> e(g_mu);
+    g_last_error = msg;
+}
+
 void unload_locked() {
+    if (g_ctx) {
+        llama_free(g_ctx);
+        g_ctx = nullptr;
+    }
     if (g_model) {
         llama_model_free(g_model);
         g_model = nullptr;
@@ -227,7 +242,7 @@ extern "C" int dl_host_load(const char * model_path, const char ** endpoints, in
             return DL_ERR_LOAD;
         }
         for (size_t d = 0; d < ggml_backend_reg_dev_count(reg); d++) {
-            devs.push_back({ggml_backend_reg_dev_get(reg, d), endpoints[i]});
+            devs.push_back({ggml_backend_reg_dev_get(reg, d), endpoints[i], d});
         }
     }
     for (ggml_backend_dev_t dev : default_devices()) {
@@ -248,6 +263,7 @@ extern "C" int dl_host_load(const char * model_path, const char ** endpoints, in
     params.progress_callback_user_data = &pctx;
 
     dl_stats::reset();
+    ggml_backend_rpc_clear_failure();
     llama_model * model = llama_model_load_from_file(model_path, params);
     if (!model) {
         std::lock_guard<std::mutex> e(g_mu);
@@ -255,9 +271,135 @@ extern "C" int dl_host_load(const char * model_path, const char ** endpoints, in
         if (g_last_error.empty()) g_last_error = std::string("failed to load ") + model_path;
         return oom ? DL_ERR_OOM : DL_ERR_LOAD;
     }
+    llama_context_params cparams = llama_context_default_params();
+    cparams.n_ctx   = N_CTX;
+    cparams.n_batch = N_BATCH;
+    llama_context * ctx = llama_init_from_model(model, cparams);
+    if (!ctx) {
+        llama_model_free(model);
+        std::lock_guard<std::mutex> e(g_mu);
+        if (g_last_error.empty()) g_last_error = "failed to create the inference context";
+        return g_last_error.find("allocate") != std::string::npos ? DL_ERR_OOM : DL_ERR_LOAD;
+    }
     g_model     = model;
+    g_ctx       = ctx;
     g_host_devs = std::move(devs);
     return DL_OK;
+}
+
+namespace {
+
+// The model's chat template applied to the conversation, ending with the assistant turn.
+bool format_chat(const std::vector<llama_chat_message> & msgs, std::string & out) {
+    const char * tmpl = llama_model_chat_template(g_model, nullptr);
+    std::vector<char> buf(4096);
+    for (const char * t : {tmpl, "chatml"}) {   // fall back to ChatML if the template is not recognised
+        if (!t) continue;
+        int32_t n = llama_chat_apply_template(t, msgs.data(), msgs.size(), true, buf.data(), (int32_t) buf.size());
+        if (n > (int32_t) buf.size()) {
+            buf.resize(n);
+            n = llama_chat_apply_template(t, msgs.data(), msgs.size(), true, buf.data(), (int32_t) buf.size());
+        }
+        if (n >= 0) {
+            out.assign(buf.data(), n);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool worker_lost() {
+    char ep[128] = {0};
+    if (!ggml_backend_rpc_get_failure(ep, sizeof(ep))) return false;
+    set_last_error(ep);
+    return true;
+}
+
+struct sampler_guard {
+    llama_sampler * s;
+    ~sampler_guard() { llama_sampler_free(s); }
+};
+
+} // namespace
+
+extern "C" int dl_host_generate(const char ** roles, const char ** contents, int n_messages,
+                                int max_tokens, float temperature, unsigned int seed,
+                                dl_token_cb cb, void * user, int * n_tokens) {
+    if (n_tokens) *n_tokens = 0;
+    if (!roles || !contents || n_messages <= 0 || max_tokens <= 0) return DL_ERR_ARGS;
+    std::lock_guard<std::mutex> lk(g_host_mu);
+    if (!g_model || !g_ctx) return DL_ERR_NOT_LOADED;
+    if (worker_lost()) return DL_ERR_WORKER_LOST;
+    g_cancel = false;
+
+    std::vector<llama_chat_message> msgs;
+    for (int i = 0; i < n_messages; i++) msgs.push_back({roles[i], contents[i]});
+    std::string prompt;
+    if (!format_chat(msgs, prompt)) {
+        set_last_error("cannot apply the chat template");
+        return DL_ERR_ARGS;
+    }
+
+    const llama_vocab * vocab = llama_model_get_vocab(g_model);
+    // the template already contains any BOS text, so add no special tokens; parse them instead
+    int32_t n = -llama_tokenize(vocab, prompt.c_str(), (int32_t) prompt.size(), nullptr, 0, false, true);
+    std::vector<llama_token> tokens(n);
+    if (llama_tokenize(vocab, prompt.c_str(), (int32_t) prompt.size(), tokens.data(), n, false, true) < 0) {
+        set_last_error("tokenization failed");
+        return DL_ERR_ARGS;
+    }
+    if (tokens.size() + (size_t) max_tokens > llama_n_ctx(g_ctx)) {
+        set_last_error("conversation is too long for the " + std::to_string(llama_n_ctx(g_ctx)) + "-token context");
+        return DL_ERR_CONTEXT;
+    }
+
+    llama_memory_clear(llama_get_memory(g_ctx), true);
+
+    // prompt, in batches
+    for (size_t i = 0; i < tokens.size(); i += N_BATCH) {
+        const int32_t len = (int32_t) std::min<size_t>(N_BATCH, tokens.size() - i);
+        const int32_t rc  = llama_decode(g_ctx, llama_batch_get_one(tokens.data() + i, len));
+        if (worker_lost()) return DL_ERR_WORKER_LOST;
+        if (rc != 0) {
+            set_last_error("llama_decode failed on the prompt (" + std::to_string(rc) + ")");
+            return DL_ERR_DECODE;
+        }
+    }
+
+    sampler_guard smpl{llama_sampler_chain_init(llama_sampler_chain_default_params())};
+    if (temperature <= 0.0f) {
+        llama_sampler_chain_add(smpl.s, llama_sampler_init_greedy());
+    } else {
+        llama_sampler_chain_add(smpl.s, llama_sampler_init_top_p(0.95f, 1));
+        llama_sampler_chain_add(smpl.s, llama_sampler_init_temp(temperature));
+        llama_sampler_chain_add(smpl.s, llama_sampler_init_dist(seed));
+    }
+
+    char piece[256];
+    for (int i = 0; i < max_tokens; i++) {
+        llama_token tok = llama_sampler_sample(smpl.s, g_ctx, -1);
+        if (worker_lost()) return DL_ERR_WORKER_LOST;
+        if (llama_vocab_is_eog(vocab, tok)) return DL_STOP_EOS;
+
+        if (n_tokens) *n_tokens = i + 1;
+        const int32_t len = llama_token_to_piece(vocab, tok, piece, sizeof(piece) - 1, 0, false);
+        piece[len > 0 ? len : 0] = '\0';
+        if (cb && cb(piece, user) != 0) return DL_STOP_CANCELLED;
+        if (g_cancel) return DL_STOP_CANCELLED;
+        if (i + 1 == max_tokens) break;
+
+        const int32_t rc = llama_decode(g_ctx, llama_batch_get_one(&tok, 1));
+        if (worker_lost()) return DL_ERR_WORKER_LOST;
+        if (rc != 0) {
+            set_last_error("llama_decode failed (" + std::to_string(rc) + ")");
+            return DL_ERR_DECODE;
+        }
+    }
+    return DL_STOP_MAX_TOKENS;
+}
+
+extern "C" void dl_host_cancel(void) {
+    g_cancel = true;
 }
 
 extern "C" int dl_stats_devices(dl_device_share_t * out, int max) {
@@ -282,7 +424,11 @@ extern "C" int dl_stats_devices(dl_device_share_t * out, int max) {
             if (s.layer_first < 0 || layer < s.layer_first) s.layer_first = layer;
             if (layer > s.layer_last) s.layer_last = layer;
         }
-        auto it = snap.model_mib.find(dev_name);
+        // local buffers are named after the device; RPC buffers after (index on server, endpoint)
+        const std::string buf_key = d.endpoint.empty()
+            ? dev_name
+            : "RPC" + std::to_string(d.index) + "[" + d.endpoint + "]";
+        auto it = snap.model_mib.find(buf_key);
         s.buffer_mib = it == snap.model_mib.end() ? -1.0 : it->second;
     }
     return n;

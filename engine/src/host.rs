@@ -1,10 +1,11 @@
 use std::ffi::{CStr, CString};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::os::raw::{c_float, c_void};
+use std::ops::ControlFlow;
+use std::os::raw::{c_char, c_float, c_int, c_void};
 use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::stats::{read_shares, DeviceShare};
 use crate::{ffi, EngineError};
@@ -72,6 +73,144 @@ impl Host {
     /// Each device's share of the model, in load order (RPC workers first, this device last).
     pub fn device_shares(&self) -> Vec<DeviceShare> {
         read_shares()
+    }
+
+    /// Generate the assistant's reply to `messages`, streaming text to `on_token`.
+    /// Return `ControlFlow::Break` from the callback (or call [`Host::cancel`]) to stop early.
+    /// After `Err(WorkerLost)` the model is unusable: drop this `Host` and load again.
+    pub fn generate(
+        &self,
+        messages: &[ChatMessage],
+        params: GenParams,
+        mut on_token: impl FnMut(&str) -> ControlFlow<()>,
+    ) -> Result<GenSummary, EngineError> {
+        let to_c = |s: &str| CString::new(s.replace('\0', "")).expect("NUL removed");
+        let roles: Vec<CString> = messages.iter().map(|m| to_c(m.role.as_str())).collect();
+        let contents: Vec<CString> = messages.iter().map(|m| to_c(&m.content)).collect();
+        let role_ptrs: Vec<*const c_char> = roles.iter().map(|c| c.as_ptr()).collect();
+        let content_ptrs: Vec<*const c_char> = contents.iter().map(|c| c.as_ptr()).collect();
+
+        let mut stream = Utf8Stream { pending: Vec::new(), on_token: &mut on_token };
+        let mut n_tokens: c_int = 0;
+        let started = Instant::now();
+        let rc = unsafe {
+            ffi::dl_host_generate(
+                role_ptrs.as_ptr(),
+                content_ptrs.as_ptr(),
+                role_ptrs.len() as c_int,
+                params.max_tokens.min(i32::MAX as u32) as c_int,
+                params.temperature,
+                params.seed,
+                Some(token_trampoline),
+                &mut stream as *mut Utf8Stream as *mut c_void,
+                &mut n_tokens,
+            )
+        };
+        stream.flush();
+        let summary = |stopped| GenSummary { tokens: n_tokens.max(0) as u32, millis: started.elapsed().as_millis() as u64, stopped };
+        match rc {
+            ffi::DL_STOP_EOS => Ok(summary(StopReason::Eos)),
+            ffi::DL_STOP_CANCELLED => Ok(summary(StopReason::Cancelled)),
+            ffi::DL_STOP_MAX_TOKENS => Ok(summary(StopReason::MaxTokens)),
+            ffi::DL_ERR_WORKER_LOST => Err(EngineError::WorkerLost(last_error())),
+            ffi::DL_ERR_CONTEXT => Err(EngineError::ContextFull(last_error())),
+            ffi::DL_ERR_NOT_LOADED => Err(EngineError::Load("no model loaded".into())),
+            _ => Err(EngineError::Generate(last_error())),
+        }
+    }
+
+    /// Stop a running [`Host::generate`] after its current token. Safe from any thread.
+    pub fn cancel(&self) {
+        unsafe { ffi::dl_host_cancel() };
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatRole {
+    System,
+    User,
+    Assistant,
+}
+
+impl ChatRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChatRole::System => "system",
+            ChatRole::User => "user",
+            ChatRole::Assistant => "assistant",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessage {
+    pub role: ChatRole,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GenParams {
+    pub max_tokens: u32,
+    /// 0 = greedy (deterministic).
+    pub temperature: f32,
+    pub seed: u32,
+}
+
+impl Default for GenParams {
+    fn default() -> Self {
+        GenParams { max_tokens: 512, temperature: 0.7, seed: 0 }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    Eos,
+    MaxTokens,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GenSummary {
+    pub tokens: u32,
+    pub millis: u64,
+    pub stopped: StopReason,
+}
+
+/// Re-assembles llama.cpp's byte pieces (which can split a UTF-8 character) into valid text.
+struct Utf8Stream<'a> {
+    pending: Vec<u8>,
+    on_token: &'a mut dyn FnMut(&str) -> ControlFlow<()>,
+}
+
+impl Utf8Stream<'_> {
+    /// Emit the longest valid UTF-8 prefix; keep an incomplete trailing character for later.
+    fn push(&mut self, bytes: &[u8]) -> ControlFlow<()> {
+        self.pending.extend_from_slice(bytes);
+        let valid = match std::str::from_utf8(&self.pending) {
+            Ok(_) => self.pending.len(),
+            Err(e) if e.error_len().is_none() => e.valid_up_to(), // incomplete at the end: wait
+            Err(_) => self.pending.len(),                          // invalid bytes: emit lossily
+        };
+        if valid == 0 {
+            return ControlFlow::Continue(());
+        }
+        let chunk: Vec<u8> = self.pending.drain(..valid).collect();
+        (self.on_token)(&String::from_utf8_lossy(&chunk))
+    }
+
+    fn flush(&mut self) {
+        if !self.pending.is_empty() {
+            let rest = std::mem::take(&mut self.pending);
+            let _ = (self.on_token)(&String::from_utf8_lossy(&rest));
+        }
+    }
+}
+
+unsafe extern "C" fn token_trampoline(piece: *const c_char, user: *mut c_void) -> c_int {
+    let stream = &mut *(user as *mut Utf8Stream);
+    match stream.push(CStr::from_ptr(piece).to_bytes()) {
+        ControlFlow::Continue(()) => 0,
+        ControlFlow::Break(()) => 1,
     }
 }
 
