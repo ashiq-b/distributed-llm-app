@@ -22,7 +22,7 @@ build-*/
 *.xcframework/
 
 # Models (downloaded at runtime, never committed)
-models/
+/models/
 *.gguf
 
 # Working task list (local only)
