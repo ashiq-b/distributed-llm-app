@@ -24,3 +24,9 @@ build-*/
 # Models (downloaded at runtime, never committed)
 models/
 *.gguf
+
+# Working task list (local only)
+task.md
+
+# Plan-execution scratch
+.superpowers/
