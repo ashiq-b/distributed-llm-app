@@ -4,6 +4,7 @@ use crate::ffi;
 
 /// One device's share of a loaded model, exactly as llama.cpp reported it.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DeviceShare {
     /// Device description, e.g. "Apple M5".
     pub name: String,

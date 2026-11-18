@@ -126,6 +126,8 @@ impl Host {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum ChatRole {
     System,
     User,
@@ -143,12 +145,14 @@ impl ChatRole {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChatMessage {
     pub role: ChatRole,
     pub content: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GenParams {
     pub max_tokens: u32,
     /// 0 = greedy (deterministic).
@@ -163,6 +167,8 @@ impl Default for GenParams {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum StopReason {
     Eos,
     MaxTokens,
@@ -170,6 +176,7 @@ pub enum StopReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GenSummary {
     pub tokens: u32,
     pub millis: u64,

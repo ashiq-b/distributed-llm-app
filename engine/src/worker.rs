@@ -17,6 +17,7 @@ pub struct WorkerConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WorkerStatus {
     pub running: bool,
     /// "host:port" as bound.

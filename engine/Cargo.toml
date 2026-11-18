@@ -6,8 +6,13 @@ description = "Safe Rust API over llama.cpp (pinned) + a thin C wrapper: RPC wor
 publish = false
 links = "dl_engine"
 
+[features]
+# Serialize/Deserialize for the public data types (used by the app to talk to its UI).
+serde = ["dep:serde"]
+
 [dependencies]
 thiserror = "2"
+serde = { version = "1", features = ["derive"], optional = true }
 
 [build-dependencies]
 cmake = "0.1"
