@@ -2,11 +2,12 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{test_model, RpcServer};
+use common::{serial, test_model, RpcServer};
 use dl_engine::{EngineError, Host};
 
 #[test]
 fn split_puts_tensors_on_rpc_device() {
+    let _g = serial();
     let Some(model) = test_model() else { return };
     let server = RpcServer::spawn();
 
@@ -36,6 +37,7 @@ fn split_puts_tensors_on_rpc_device() {
 
 #[test]
 fn load_fails_fast_on_dead_endpoint() {
+    let _g = serial();
     let Some(model) = test_model() else { return };
     let start = Instant::now();
     match Host::load(&model, &["127.0.0.1:1".to_string()], None, |_| {}) {
@@ -47,6 +49,7 @@ fn load_fails_fast_on_dead_endpoint() {
 
 #[test]
 fn load_reports_missing_model_file() {
+    let _g = serial();
     match Host::load(std::path::Path::new("/nonexistent/model.gguf"), &[], None, |_| {}) {
         Err(EngineError::Load(_)) => {}
         other => panic!("expected Err(Load), got {:?}", other.map(|_| ())),
@@ -55,6 +58,7 @@ fn load_reports_missing_model_file() {
 
 #[test]
 fn split_across_two_workers_reports_each_share() {
+    let _g = serial();
     let Some(model) = test_model() else { return };
     let (a, b) = (RpcServer::spawn(), RpcServer::spawn());
     let host = Host::load(&model, &[a.endpoint(), b.endpoint()], None, |_| {}).expect("load across two workers");

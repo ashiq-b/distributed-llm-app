@@ -1,14 +1,10 @@
 mod common;
 
 use std::ops::ControlFlow;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use common::{test_model, RpcServer};
+use common::{serial, test_model, RpcServer};
 use dl_engine::{ChatMessage, ChatRole, EngineError, GenParams, Host, StopReason};
-
-// One Host per process: run these tests one at a time.
-static SERIAL: Mutex<()> = Mutex::new(());
 
 fn question() -> Vec<ChatMessage> {
     vec![ChatMessage { role: ChatRole::User, content: "What is the capital of France? Answer in one word.".into() }]
@@ -20,7 +16,7 @@ fn greedy(max_tokens: u32) -> GenParams {
 
 #[test]
 fn split_greedy_matches_single_device() {
-    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = serial();
     let Some(model) = test_model() else { return };
 
     let mut single = String::new();
@@ -45,7 +41,7 @@ fn split_greedy_matches_single_device() {
 
 #[test]
 fn cancel_stops_generation() {
-    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = serial();
     let Some(model) = test_model() else { return };
     let host = Host::load(&model, &[], None, |_| {}).unwrap();
 
@@ -69,7 +65,7 @@ fn cancel_stops_generation() {
 
 #[test]
 fn max_tokens_is_reported() {
-    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = serial();
     let Some(model) = test_model() else { return };
     let host = Host::load(&model, &[], None, |_| {}).unwrap();
     let long = vec![ChatMessage { role: ChatRole::User, content: "Count from 1 to 100, separated by commas.".into() }];
@@ -80,7 +76,7 @@ fn max_tokens_is_reported() {
 
 #[test]
 fn worker_loss_returns_error() {
-    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = serial();
     let Some(model) = test_model() else { return };
     let mut server = RpcServer::spawn();
     let endpoint = server.endpoint();

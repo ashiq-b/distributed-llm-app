@@ -2,6 +2,7 @@
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 /// A real llama.cpp RPC worker in a separate process (built by scripts/build-llama-cli.sh).
@@ -49,3 +50,9 @@ pub fn test_model() -> Option<PathBuf> {
     }
 }
 
+
+/// The engine allows one loaded model per process, so tests that load must not overlap.
+pub fn serial() -> MutexGuard<'static, ()> {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+}
