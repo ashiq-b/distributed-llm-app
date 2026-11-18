@@ -2,6 +2,9 @@
 //! every resulting static library into this crate.
 use std::path::{Path, PathBuf};
 
+/// Minimum iOS version, matching llama.cpp's build-xcframework.sh.
+const IOS_MIN_VERSION: &str = "16.4";
+
 fn main() {
     println!("cargo:rerun-if-changed=cpp");
     println!("cargo:rerun-if-changed=../patches/llama.cpp");
@@ -14,13 +17,29 @@ fn main() {
     println!("cargo:rerun-if-changed=LLAMA_CPP_VERSION");
 
     // llama.cpp in Debug is far too slow to be useful, so always build Release.
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
     let mut cfg = cmake::Config::new("cpp");
     cfg.profile("Release").build_target("dl_engine");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
-        if let Ok(v) = std::env::var("MACOSX_DEPLOYMENT_TARGET") {
-            cfg.define("CMAKE_OSX_DEPLOYMENT_TARGET", v);
+    match target_os.as_str() {
+        "macos" => {
+            println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
+            if let Ok(v) = std::env::var("MACOSX_DEPLOYMENT_TARGET") {
+                cfg.define("CMAKE_OSX_DEPLOYMENT_TARGET", v);
+            }
         }
+        "ios" => {
+            // Same settings as llama.cpp's own build-xcframework.sh (device build).
+            let simulator = std::env::var("TARGET").unwrap().ends_with("-sim");
+            cfg.define("CMAKE_SYSTEM_NAME", "iOS")
+                .define("IOS", "ON")
+                .define("CMAKE_OSX_SYSROOT", if simulator { "iphonesimulator" } else { "iphoneos" })
+                .define("CMAKE_OSX_ARCHITECTURES", "arm64")
+                .define("CMAKE_OSX_DEPLOYMENT_TARGET", IOS_MIN_VERSION)
+                .define("GGML_METAL_TARGET_OS", "ios")
+                .define("GGML_NATIVE", "OFF")
+                .define("GGML_OPENMP", "OFF");
+        }
+        _ => {}
     }
     let dst = cfg.build();
 
@@ -35,7 +54,6 @@ fn main() {
         println!("cargo:rustc-link-lib=static={name}");
     }
 
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
     if target_os == "macos" || target_os == "ios" {
         for fw in ["Foundation", "Metal", "MetalKit", "Accelerate"] {
             println!("cargo:rustc-link-lib=framework={fw}");

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>DistLLM connects to your other devices on this Wi‑Fi to share the work of running an AI model.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_distllm._tcp</string>
+	</array>
+</dict>
+</plist>

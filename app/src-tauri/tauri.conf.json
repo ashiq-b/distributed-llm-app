@@ -35,6 +35,10 @@
     ],
     "macOS": {
       "minimumSystemVersion": "14.0"
+    },
+    "iOS": {
+      "developmentTeam": "5VQ74NGWQF",
+      "minimumSystemVersion": "16.4"
     }
   }
 }
