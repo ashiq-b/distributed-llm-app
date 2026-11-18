@@ -1,15 +1,18 @@
 //! Tauri commands: the UI's only way into the engine. Long-running engine calls
 //! run on the blocking thread pool so the UI stays responsive.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use dl_engine::{ChatMessage, DeviceShare, EngineError, GenParams, GenSummary, Host, Worker, WorkerConfig, WorkerStatus};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::device_info::{device_info as read_device_info, DeviceInfo};
-use crate::models;
+use crate::models::{self, download, ModelEntry, ModelState};
 
 /// Engine objects owned by the app. One worker and one host per process (engine rule).
 #[derive(Default)]
@@ -17,6 +20,27 @@ pub struct EngineState {
     worker: Mutex<Option<Worker>>,
     /// `Arc` so a long generation doesn't hold the lock (cancel must get through).
     host: Mutex<Option<Arc<Host>>>,
+}
+
+/// In-flight downloads, by model id, with their cancel flags.
+#[derive(Default)]
+pub struct DownloadState {
+    active: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ModelView {
+    #[serde(flatten)]
+    entry: ModelEntry,
+    status: ModelState,
+    downloading: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct DownloadProgress {
+    id: String,
+    bytes: u64,
+    total: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -126,4 +150,77 @@ pub async fn host_unload(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn device_shares(state: State<'_, EngineState>) -> Vec<DeviceShare> {
     state.host.lock().unwrap().as_ref().map(|h| h.device_shares()).unwrap_or_default()
+}
+
+// ---- Models ----------------------------------------------------------------
+
+fn entry(id: &str) -> Result<&'static ModelEntry, String> {
+    models::catalog().iter().find(|m| m.id == id).ok_or_else(|| format!("unknown model: {id}"))
+}
+
+#[tauri::command]
+pub fn catalog(app: AppHandle, downloads: State<'_, DownloadState>) -> Result<Vec<ModelView>, String> {
+    let dir = models_dir(&app)?;
+    let active = downloads.active.lock().unwrap();
+    Ok(models::catalog()
+        .iter()
+        .map(|m| ModelView { entry: m.clone(), status: models::model_state(&dir, m), downloading: active.contains_key(&m.id) })
+        .collect())
+}
+
+#[tauri::command]
+pub fn model_state(app: AppHandle, id: String) -> Result<ModelState, String> {
+    Ok(models::model_state(&models_dir(&app)?, entry(&id)?))
+}
+
+/// Download (or resume) a catalog model. Emits `download-progress` about every 250 ms.
+#[tauri::command]
+pub async fn model_download(app: AppHandle, id: String) -> Result<ModelState, String> {
+    let m = entry(&id)?;
+    let dest = models_dir(&app)?.join(&m.file);
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let state = app.state::<DownloadState>();
+        let mut active = state.active.lock().unwrap();
+        if active.contains_key(&id) {
+            return Err(format!("{} is already downloading", m.name));
+        }
+        active.insert(id.clone(), cancel.clone());
+    }
+    blocking(move || {
+        let mut last = Instant::now() - Duration::from_secs(1);
+        let result = download::download_file(&m.url, &dest, &m.sha256, &cancel, &mut |bytes, total| {
+            if last.elapsed() >= Duration::from_millis(250) || (total > 0 && bytes == total) {
+                last = Instant::now();
+                let _ = app.emit("download-progress", DownloadProgress { id: m.id.clone(), bytes, total });
+            }
+        });
+        app.state::<DownloadState>().active.lock().unwrap().remove(&m.id);
+        result.map_err(|e| e.to_string())?;
+        Ok(download::file_state(&dest))
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn model_cancel_download(downloads: State<'_, DownloadState>, id: String) {
+    if let Some(flag) = downloads.active.lock().unwrap().get(&id) {
+        flag.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Delete a model's file and any partial download.
+#[tauri::command]
+pub fn model_delete(app: AppHandle, downloads: State<'_, DownloadState>, id: String) -> Result<ModelState, String> {
+    let m = entry(&id)?;
+    if downloads.active.lock().unwrap().contains_key(&id) {
+        return Err(format!("{} is downloading; cancel it first", m.name));
+    }
+    let dest = models_dir(&app)?.join(&m.file);
+    for path in [dest.clone(), download::part_path(&dest)] {
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| format!("cannot delete {}: {e}", path.display()))?;
+        }
+    }
+    Ok(download::file_state(&dest))
 }

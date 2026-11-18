@@ -3,16 +3,18 @@
 import { useEffect, useState } from "react";
 import {
   deviceInfo, workerStart, workerStatus, hostLoad, hostGenerate, hostCancel, hostUnload,
-  onLoadProgress, onToken,
-  type DeviceInfo, type WorkerStatus, type DeviceShare, type GenSummary,
+  onLoadProgress, onToken, catalog, modelDownload, modelCancelDownload, modelDelete, onDownloadProgress,
+  type DeviceInfo, type WorkerStatus, type DeviceShare, type GenSummary, type ModelView, type DownloadProgress,
 } from "./lib/tauri";
 
-const MODELS = ["qwen3.5-0.8b", "lfm3-1.7b", "qwen3.5-2b"]; // ids from catalog.json
+const mb = (bytes: number) => `${(bytes / 1e6).toFixed(0)} MB`;
 
 export default function App() {
   const [info, setInfo] = useState<DeviceInfo | null>(null);
   const [worker, setWorker] = useState<WorkerStatus | null>(null);
-  const [modelId, setModelId] = useState(MODELS[0]);
+  const [models, setModels] = useState<ModelView[]>([]);
+  const [dl, setDl] = useState<Record<string, DownloadProgress>>({});
+  const [modelId, setModelId] = useState("");
   const [endpoints, setEndpoints] = useState("");
   const [progress, setProgress] = useState<number | null>(null);
   const [shares, setShares] = useState<DeviceShare[]>([]);
@@ -25,9 +27,29 @@ export default function App() {
   useEffect(() => {
     deviceInfo().then(setInfo).catch((e) => setError(String(e)));
     workerStatus().then(setWorker).catch((e) => setError(String(e)));
-    const un = [onLoadProgress(setProgress), onToken((p) => setReply((r) => r + p))];
+    refreshModels();
+    const un = [
+      onLoadProgress(setProgress),
+      onToken((p) => setReply((r) => r + p)),
+      onDownloadProgress((p) => setDl((d) => ({ ...d, [p.id]: p }))),
+    ];
     return () => { un.forEach((u) => u.then((f) => f())); };
   }, []);
+
+  const refreshModels = () =>
+    catalog()
+      .then((m) => {
+        setModels(m);
+        setModelId((cur) => cur || m[0]?.id || "");
+      })
+      .catch((e) => setError(String(e)));
+
+  // Downloads run independently of the busy flag so Cancel stays usable.
+  const download = (id: string) => {
+    setError(null);
+    modelDownload(id).catch((e) => setError(String(e))).finally(refreshModels);
+    setTimeout(refreshModels, 300);
+  };
 
   const run = async (f: () => Promise<void>) => {
     setError(null);
@@ -54,9 +76,35 @@ export default function App() {
           : "Not running"}
       </p>
 
+      <h2>Models</h2>
+      {models.map((m) => {
+        const p = dl[m.id];
+        const st = m.status;
+        return (
+          <div key={m.id} style={{ marginBottom: 8 }}>
+            <b>{m.name}</b> · {m.vendor} · {m.quant} · {mb(m.size_bytes)} —{" "}
+            {m.downloading
+              ? `downloading ${p ? `${mb(p.bytes)} / ${mb(p.total)} (${p.total ? Math.floor((100 * p.bytes) / p.total) : 0}%)` : "…"}`
+              : st.state === "ready" ? "ready"
+              : st.state === "partial" ? `paused at ${mb(st.bytes)}`
+              : "not downloaded"}{" "}
+            {m.downloading ? (
+              <button onClick={() => modelCancelDownload(m.id)}>Cancel</button>
+            ) : st.state !== "ready" ? (
+              <button onClick={() => download(m.id)}>{st.state === "partial" ? "Resume" : "Download"}</button>
+            ) : null}{" "}
+            {!m.downloading && st.state !== "not_downloaded" && (
+              <button onClick={() => modelDelete(m.id).then(refreshModels).catch((e) => setError(String(e)))}>Delete</button>
+            )}
+          </div>
+        );
+      })}
+
       <h2>Host</h2>
       <select value={modelId} onChange={(e) => setModelId(e.target.value)}>
-        {MODELS.map((m) => <option key={m}>{m}</option>)}
+        {models.map((m) => (
+          <option key={m.id} value={m.id}>{m.name}{m.status.state === "ready" ? "" : " (not downloaded)"}</option>
+        ))}
       </select>{" "}
       <input placeholder="workers: 192.168.1.20:50052, …" value={endpoints} size={36}
         onChange={(e) => setEndpoints(e.target.value)} />{" "}

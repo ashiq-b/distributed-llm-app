@@ -25,4 +25,7 @@ serde_json = "1"
 dl-engine = { path = "../../engine", features = ["serde"] }
 gethostname = "1"
 libc = "0.2"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+sha2 = "0.10"
+thiserror = "2"
 

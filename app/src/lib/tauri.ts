@@ -54,3 +54,39 @@ export const onLoadProgress = (cb: (frac: number) => void): Promise<UnlistenFn> 
   listen<{ frac: number }>("load-progress", (e) => cb(e.payload.frac));
 export const onToken = (cb: (piece: string) => void): Promise<UnlistenFn> =>
   listen<{ piece: string }>("token", (e) => cb(e.payload.piece));
+
+// ---- Models ----
+
+export type ModelState =
+  | { state: "not_downloaded" }
+  | { state: "partial"; bytes: number }
+  | { state: "ready"; path: string };
+
+export interface ModelView {
+  id: string;
+  name: string;
+  vendor: string;
+  params_b: number;
+  quant: string;
+  file: string;
+  size_bytes: number;
+  sha256: string;
+  min_free_mb: number;
+  url: string;
+  status: ModelState;
+  downloading: boolean;
+}
+
+export interface DownloadProgress {
+  id: string;
+  bytes: number;
+  total: number;
+}
+
+export const catalog = () => invoke<ModelView[]>("catalog");
+export const modelState = (id: string) => invoke<ModelState>("model_state", { id });
+export const modelDownload = (id: string) => invoke<ModelState>("model_download", { id });
+export const modelCancelDownload = (id: string) => invoke<void>("model_cancel_download", { id });
+export const modelDelete = (id: string) => invoke<ModelState>("model_delete", { id });
+export const onDownloadProgress = (cb: (p: DownloadProgress) => void): Promise<UnlistenFn> =>
+  listen<DownloadProgress>("download-progress", (e) => cb(e.payload));
