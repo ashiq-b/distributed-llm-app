@@ -12,6 +12,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::device_info::{device_info as read_device_info, DeviceInfo};
+use crate::discovery::{self, PeerTable};
 use crate::models::{self, download, ModelEntry, ModelState};
 
 /// Engine objects owned by the app. One worker and one host per process (engine rule).
@@ -97,6 +98,7 @@ pub fn worker_status(state: State<'_, EngineState>) -> Option<WorkerStatus> {
 #[tauri::command]
 pub async fn host_load(app: AppHandle, model_id: String, endpoints: Vec<String>) -> Result<Vec<DeviceShare>, String> {
     let path = models::model_path(&models_dir(&app)?, &model_id)?;
+    discovery::check_endpoints(&endpoints, &app.state::<PeerTable>().snapshot(), &read_device_info())?;
     blocking(move || {
         let state = app.state::<EngineState>();
         // Only one model at a time: unload the previous one before loading.

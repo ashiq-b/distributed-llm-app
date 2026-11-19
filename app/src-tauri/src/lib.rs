@@ -1,5 +1,6 @@
 mod commands;
 mod device_info;
+mod discovery;
 mod models;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -8,6 +9,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(commands::EngineState::default())
         .manage(commands::DownloadState::default())
+        .manage(discovery::PeerTable::default())
         .invoke_handler(tauri::generate_handler![
             commands::device_info,
             commands::worker_start,
