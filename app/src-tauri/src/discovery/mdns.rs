@@ -32,6 +32,8 @@ pub struct Mdns {
     registry: Arc<Mutex<PeerRegistry>>,
     browsing: AtomicBool,
     advertising: Mutex<Option<Arc<AtomicBool>>>,
+    /// Full name of the service being announced, once registered.
+    advertised: Arc<Mutex<Option<String>>>,
 }
 
 impl Mdns {
@@ -42,6 +44,7 @@ impl Mdns {
             registry,
             browsing: AtomicBool::new(false),
             advertising: Mutex::new(None),
+            advertised: Arc::default(),
         })
     }
 
@@ -79,6 +82,17 @@ impl Mdns {
         Ok(())
     }
 
+    /// Stop announcing and send the goodbye now; waits up to a second for it to go out.
+    pub fn stop_advertising(&self) {
+        if let Some(stop) = self.advertising.lock().unwrap().take() {
+            stop.store(true, Ordering::SeqCst);
+        }
+        let fullname = self.advertised.lock().unwrap().take();
+        if let Some(done) = fullname.and_then(|f| self.daemon.unregister(&f).ok()) {
+            let _ = done.recv_timeout(Duration::from_secs(1));
+        }
+    }
+
     /// Announce this device now and every `HEARTBEAT`. `me` is called each time, so the
     /// record carries current values (free memory, role). Replaces any earlier advert.
     pub fn advertise(&self, me: impl Fn() -> PeerInfo + Send + 'static) -> Result<(), String> {
@@ -87,6 +101,7 @@ impl Mdns {
             previous.store(true, Ordering::SeqCst);
         }
         let daemon = self.daemon.clone();
+        let advertised = self.advertised.clone();
         std::thread::Builder::new()
             .name("mdns-advertise".into())
             .spawn(move || {
@@ -102,6 +117,7 @@ impl Mdns {
                     match ServiceInfo::new(SERVICE_TYPE, &peer.id, &format!("{}.local.", peer.id), (), peer.rpc_port, &txt[..]) {
                         Ok(info) => {
                             fullname = Some(info.get_fullname().to_string());
+                            *advertised.lock().unwrap() = fullname.clone();
                             if let Err(e) = daemon.register(info.enable_addr_auto()) {
                                 eprintln!("mDNS announce failed: {e}");
                             }
@@ -167,6 +183,29 @@ mod tests {
         assert_eq!(found.rpc_port, DEFAULT_RPC_PORT);
         assert_eq!(found.free_mem_mb, Some(8000));
         assert_eq!(found.source, PeerSource::Mdns);
+    }
+
+    #[test]
+    fn goodbye_removes_peer_at_once() {
+        let id = format!("bye-{}", std::process::id());
+        let registry: Arc<Mutex<PeerRegistry>> = Arc::default();
+        let mdns = Mdns::new(registry.clone()).unwrap();
+        let me = peer(&id, "127.0.0.1");
+        mdns.advertise(move || me.clone()).unwrap();
+        mdns.browse(|_| {}).unwrap();
+
+        let listed = || registry.lock().unwrap().list().iter().any(|p| p.id == id);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !listed() {
+            assert!(Instant::now() < deadline, "own advert not found within 5 s");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        mdns.stop_advertising();
+        let t = Instant::now();
+        while listed() {
+            assert!(t.elapsed() < Duration::from_secs(3), "still listed 3 s after goodbye (expiry alone takes 15 s)");
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     #[test]

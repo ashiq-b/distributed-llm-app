@@ -64,6 +64,13 @@ impl Discovery {
         Ok(b)
     }
 
+    /// Stop announcing this device and say goodbye, so peers drop it at once (app quit).
+    pub fn shutdown(&self) {
+        if let Some(b) = self.backend.lock().unwrap().as_ref() {
+            b.stop_advertising();
+        }
+    }
+
     /// Other devices (never this one), sorted by name.
     pub fn peers(&self) -> Vec<PeerInfo> {
         let peers = self.registry.lock().unwrap().list();

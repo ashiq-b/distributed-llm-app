@@ -41,17 +41,29 @@ export interface GenSummary {
 }
 
 export const deviceInfo = () => invoke<DeviceInfo>("device_info");
-export const workerStart = (port: number) => invoke<WorkerStatus>("worker_start", { port });
-export const workerStatus = () => invoke<WorkerStatus | null>("worker_status");
-export const hostLoad = (modelId: string, endpoints: string[]) =>
-  invoke<DeviceShare[]>("host_load", { modelId, endpoints });
-export const hostGenerate = (messages: ChatMessage[]) => invoke<GenSummary>("host_generate", { messages });
-export const hostCancel = () => invoke<void>("host_cancel");
-export const hostUnload = () => invoke<void>("host_unload");
-export const deviceShares = () => invoke<DeviceShare[]>("device_shares");
 
-export const onLoadProgress = (cb: (frac: number) => void): Promise<UnlistenFn> =>
-  listen<{ frac: number }>("load-progress", (e) => cb(e.payload.frac));
+/** What this device is doing. A worker stays one until the app is closed. */
+export type RoleState =
+  | { role: "idle" }
+  | { role: "worker"; status: WorkerStatus }
+  | { role: "loading"; model_id: string; frac: number }
+  | { role: "host"; model_id: string; shares: DeviceShare[] };
+
+export const roleState = () => invoke<RoleState>("role_state");
+export const becomeWorker = (port?: number) => invoke<RoleState>("become_worker", { port });
+/** peerIds: ids from the discovered device list; empty = this device alone. */
+export const becomeHost = (modelId: string, peerIds: string[]) =>
+  invoke<DeviceShare[]>("become_host", { modelId, peerIds });
+export const leaveRole = () => invoke<RoleState>("leave_role");
+export const onRoleChanged = (cb: (s: RoleState) => void): Promise<UnlistenFn> =>
+  listen<RoleState>("role-changed", (e) => cb(e.payload));
+
+/** Sends one message in the current conversation; the answer streams as `token` events. */
+export const chatSend = (text: string) => invoke<GenSummary>("chat_send", { text });
+export const chatStop = () => invoke<void>("chat_stop");
+export const chatHistory = () => invoke<ChatMessage[]>("chat_history");
+export const chatReset = () => invoke<void>("chat_reset");
+
 export const onToken = (cb: (piece: string) => void): Promise<UnlistenFn> =>
   listen<{ piece: string }>("token", (e) => cb(e.payload.piece));
 

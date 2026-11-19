@@ -2,25 +2,31 @@
 //! run on the blocking thread pool so the UI stays responsive.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use dl_engine::{ChatMessage, DeviceShare, EngineError, GenParams, GenSummary, Host, Worker, WorkerConfig, WorkerStatus};
+use dl_engine::{ChatMessage, DeviceShare, EngineError, GenParams, GenSummary, Host, Worker, WorkerConfig};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::device_info::{device_info as read_device_info, DeviceInfo};
 use crate::discovery::{self, registry, DeviceRole, Discovery, PeerView};
+use crate::chat::ChatSession;
 use crate::models::{self, download, ModelEntry, ModelState};
+use crate::roles::{self, RoleState, Roles};
 
-/// Engine objects owned by the app. One worker and one host per process (engine rule).
+/// Engine objects owned by the app. One worker and one host per process (engine rule),
+/// and one role at a time (`roles.rs`).
 #[derive(Default)]
 pub struct EngineState {
     worker: Mutex<Option<Worker>>,
     /// `Arc` so a long generation doesn't hold the lock (cancel must get through).
     host: Mutex<Option<Arc<Host>>>,
+    roles: Mutex<Roles>,
+    chat: Mutex<ChatSession>,
 }
 
 /// In-flight downloads, by model id, with their cancel flags.
@@ -42,11 +48,6 @@ struct DownloadProgress {
     id: String,
     bytes: u64,
     total: u64,
-}
-
-#[derive(Clone, Serialize)]
-struct LoadProgress {
-    frac: f32,
 }
 
 #[derive(Clone, Serialize)]
@@ -77,102 +78,173 @@ pub fn device_info() -> DeviceInfo {
     read_device_info()
 }
 
+/// The current role and what goes with it.
 #[tauri::command]
-pub async fn worker_start(app: AppHandle, port: u16) -> Result<WorkerStatus, String> {
+pub fn role_state(state: State<'_, EngineState>) -> RoleState {
+    state.roles.lock().unwrap().state().clone()
+}
+
+/// Run a role change and tell the UI the new state (`role-changed`).
+fn change_role<T>(app: &AppHandle, f: impl FnOnce(&mut Roles) -> T) -> T {
+    let state = app.state::<EngineState>();
+    let mut roles = state.roles.lock().unwrap();
+    let out = f(&mut roles);
+    let _ = app.emit("role-changed", roles.state().clone());
+    out
+}
+
+/// Become a worker on `port` (default 50052) and announce it on the network.
+/// A worker stays on until the app is closed (llama.cpp can't stop its RPC server).
+#[tauri::command]
+pub async fn become_worker(app: AppHandle, port: Option<u16>) -> Result<RoleState, String> {
+    let port = port.unwrap_or(registry::DEFAULT_RPC_PORT);
     let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("rpc");
     blocking(move || {
         let state = app.state::<EngineState>();
+        // Held throughout, so a concurrent become_host can't slip in.
+        let mut roles = state.roles.lock().unwrap();
+        roles.can_become_worker()?;
         let mut worker = state.worker.lock().unwrap();
-        if let Some(w) = worker.as_ref() {
-            return Ok(w.status());
+        if worker.is_none() {
+            let w = Worker::start(WorkerConfig { bind_host: "0.0.0.0".into(), port, cache_dir: Some(cache_dir), threads: None })
+                .map_err(|e| e.to_string())?;
+            roles.set_worker(w.status());
+            *worker = Some(w);
+            // Discovery failing must not stop the worker: others can still add it by address.
+            let discovery = app.state::<Discovery>();
+            let announced = discovery.backend(&app).and_then(|b| {
+                let me = discovery.me(&read_device_info(), DeviceRole::Worker, port);
+                b.advertise(move || discovery_me_now(&me))
+            });
+            if let Err(e) = announced {
+                eprintln!("worker is not announced on the network: {e}");
+            }
         }
-        let w = Worker::start(WorkerConfig { bind_host: "0.0.0.0".into(), port, cache_dir: Some(cache_dir), threads: None })
-            .map_err(|e| e.to_string())?;
-        let status = w.status();
-        *worker = Some(w);
-        // Announce ourselves as a worker. Discovery failing must not stop the worker:
-        // others can still add this device by address.
-        let discovery = app.state::<Discovery>();
-        let announced = discovery.backend(&app).and_then(|m| {
-            let me = discovery.me(&read_device_info(), DeviceRole::Worker, port);
-            m.advertise(move || discovery_me_now(&me))
-        });
-        if let Err(e) = announced {
-            eprintln!("worker is not announced on the network: {e}");
-        }
-        drop(worker);
+        let now = roles.state().clone();
+        drop((worker, roles));
+        let _ = app.emit("role-changed", now.clone());
         update_keep_awake(&app);
-        Ok(status)
+        Ok(now)
     })
     .await
 }
 
+/// Load `model_id` split across this device and the chosen peers (by id; none = alone).
+/// Refused before any connection if a peer is incompatible or the devices together
+/// don't have the memory the model needs.
 #[tauri::command]
-pub fn worker_status(state: State<'_, EngineState>) -> Option<WorkerStatus> {
-    state.worker.lock().unwrap().as_ref().map(Worker::status)
-}
-
-#[tauri::command]
-pub async fn host_load(app: AppHandle, model_id: String, endpoints: Vec<String>) -> Result<Vec<DeviceShare>, String> {
+pub async fn become_host(app: AppHandle, model_id: String, peer_ids: Vec<String>) -> Result<Vec<DeviceShare>, String> {
+    let model = models::catalog().iter().find(|m| m.id == model_id).ok_or_else(|| format!("unknown model: {model_id}"))?;
     let path = models::model_path(&models_dir(&app)?, &model_id)?;
-    discovery::check_endpoints(&endpoints, &app.state::<Discovery>().peers(), &read_device_info())?;
+    let local = read_device_info();
+    let known = app.state::<Discovery>().peers();
+    let mut chosen = Vec::new();
+    for id in &peer_ids {
+        chosen.push(known.iter().find(|p| &p.id == id).cloned().ok_or_else(|| format!("device no longer available: {id}"))?);
+    }
+    let endpoints: Vec<String> = chosen.iter().map(|p| SocketAddr::new(p.addr, p.rpc_port).to_string()).collect();
+    discovery::check_endpoints(&endpoints, &chosen, &local)?;
+    let peers_free: Vec<Option<u64>> = chosen.iter().map(|p| p.free_mem_mb).collect();
+    roles::memory_guard(model.min_free_mb, local.free_mem_mb, &peers_free)?;
+
+    change_role(&app, |r| r.begin_loading(&model_id))?;
     blocking(move || {
         let state = app.state::<EngineState>();
-        // Only one model at a time: unload the previous one before loading.
-        state.host.lock().unwrap().take();
-        update_keep_awake(&app);
-        let emitter = app.clone();
-        let host = Host::load(&path, &endpoints, None, move |frac| {
-            let _ = emitter.emit("load-progress", LoadProgress { frac });
-        })
-        .map_err(|e| e.to_string())?;
-        let shares = host.device_shares();
-        *state.host.lock().unwrap() = Some(Arc::new(host));
-        update_keep_awake(&app);
-        Ok(shares)
+        // One model at a time: stop and unload the previous one first.
+        if let Some(old) = state.host.lock().unwrap().take() {
+            old.cancel();
+        }
+        let progress_app = app.clone();
+        let loaded = Host::load(&path, &endpoints, None, move |frac| {
+            let state = progress_app.state::<EngineState>();
+            let mut roles = state.roles.lock().unwrap();
+            if roles.set_progress(frac) {
+                let _ = progress_app.emit("role-changed", roles.state().clone());
+            }
+        });
+        match loaded {
+            Ok(host) => {
+                let shares = host.device_shares();
+                *state.host.lock().unwrap() = Some(Arc::new(host));
+                state.chat.lock().unwrap().model_loaded(&model_id);
+                change_role(&app, |r| r.finish_loading(Ok(shares.clone())));
+                update_keep_awake(&app);
+                Ok(shares)
+            }
+            Err(e) => {
+                change_role(&app, |r| r.finish_loading(Err(())));
+                update_keep_awake(&app);
+                Err(e.to_string())
+            }
+        }
     })
     .await
 }
 
+/// Unload the model and go back to Idle. A worker can't leave (see `become_worker`).
 #[tauri::command]
-pub async fn host_generate(app: AppHandle, messages: Vec<ChatMessage>) -> Result<GenSummary, String> {
-    let host = app.state::<EngineState>().host.lock().unwrap().clone().ok_or("no model loaded")?;
+pub async fn leave_role(app: AppHandle) -> Result<RoleState, String> {
     blocking(move || {
+        change_role(&app, |r| r.leave())?;
+        if let Some(host) = app.state::<EngineState>().host.lock().unwrap().take() {
+            host.cancel();
+        }
+        update_keep_awake(&app);
+        Ok(app.state::<EngineState>().roles.lock().unwrap().state().clone())
+    })
+    .await
+}
+
+/// Send a message in the current conversation. The answer streams as `token` events.
+#[tauri::command]
+pub async fn chat_send(app: AppHandle, text: String) -> Result<GenSummary, String> {
+    let state = app.state::<EngineState>();
+    let host = state.host.lock().unwrap().clone().ok_or("no model loaded")?;
+    let messages = state.chat.lock().unwrap().begin_turn(&text)?;
+    blocking(move || {
+        let mut answer = String::new();
         let result = host.generate(&messages, GenParams::default(), |piece| {
+            answer.push_str(piece);
             let _ = app.emit("token", Token { piece: piece.to_string() });
             std::ops::ControlFlow::Continue(())
         });
-        if let Err(EngineError::WorkerLost(_)) = &result {
-            // The model is unusable once a worker is gone; release it so it can be reloaded.
-            drop(host);
-            app.state::<EngineState>().host.lock().unwrap().take();
-            update_keep_awake(&app);
+        let state = app.state::<EngineState>();
+        match &result {
+            Ok(_) => state.chat.lock().unwrap().end_turn(&answer),
+            Err(e) => {
+                state.chat.lock().unwrap().fail_turn();
+                if let EngineError::WorkerLost(_) = e {
+                    // The model is unusable once a worker is gone; release it so it can be
+                    // reloaded. The conversation is kept for when the same model returns.
+                    drop(host);
+                    state.host.lock().unwrap().take();
+                    change_role(&app, |r| r.host_lost());
+                    update_keep_awake(&app);
+                }
+            }
         }
         result.map_err(|e| e.to_string())
     })
     .await
 }
 
+/// Stop the answer being written (it is kept as far as it got).
 #[tauri::command]
-pub fn host_cancel(state: State<'_, EngineState>) {
+pub fn chat_stop(state: State<'_, EngineState>) {
     if let Some(host) = state.host.lock().unwrap().as_ref() {
         host.cancel();
     }
 }
 
 #[tauri::command]
-pub async fn host_unload(app: AppHandle) -> Result<(), String> {
-    blocking(move || {
-        app.state::<EngineState>().host.lock().unwrap().take();
-        update_keep_awake(&app);
-        Ok(())
-    })
-    .await
+pub fn chat_history(state: State<'_, EngineState>) -> Vec<ChatMessage> {
+    state.chat.lock().unwrap().history().to_vec()
 }
 
+/// Start a new conversation with the same model.
 #[tauri::command]
-pub fn device_shares(state: State<'_, EngineState>) -> Vec<DeviceShare> {
-    state.host.lock().unwrap().as_ref().map(|h| h.device_shares()).unwrap_or_default()
+pub fn chat_reset(state: State<'_, EngineState>) -> Result<(), String> {
+    state.chat.lock().unwrap().reset()
 }
 
 /// Keep the screen on while this device is a worker or has a model loaded: a locked

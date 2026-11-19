@@ -1,9 +1,11 @@
 use tauri::Manager;
 
+mod chat;
 mod commands;
 mod device_info;
 mod discovery;
 mod models;
+mod roles;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,13 +22,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::device_info,
-            commands::worker_start,
-            commands::worker_status,
-            commands::host_load,
-            commands::host_generate,
-            commands::host_cancel,
-            commands::host_unload,
-            commands::device_shares,
+            commands::role_state,
+            commands::become_worker,
+            commands::become_host,
+            commands::leave_role,
+            commands::chat_send,
+            commands::chat_stop,
+            commands::chat_history,
+            commands::chat_reset,
             commands::discovery_start,
             commands::discovery_peers,
             commands::add_manual_peer,
@@ -36,6 +39,12 @@ pub fn run() {
             commands::model_cancel_download,
             commands::model_delete,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Say goodbye on the network so peers drop this device at once.
+            if let tauri::RunEvent::Exit = event {
+                app.state::<discovery::Discovery>().shutdown();
+            }
+        });
 }

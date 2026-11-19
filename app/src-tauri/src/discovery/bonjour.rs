@@ -109,6 +109,16 @@ impl Bonjour {
     }
 }
 
+impl Bonjour {
+    /// Nothing to do at app exit on iOS: the plugin call would wait for the main thread,
+    /// which is the one exiting, and iOS ends a closed app's Bonjour adverts itself.
+    pub fn stop_advertising(&self) {
+        if let Some(stop) = self.advertising.lock().unwrap().take() {
+            stop.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
 /// Keep the screen on (the OS suspends networking when an iPhone locks).
 pub fn set_keep_awake(app: &AppHandle, enabled: bool) {
     if let Err(e) = app.bonjour().call::<Value>("setKeepAwake", json!({ "enabled": enabled })) {

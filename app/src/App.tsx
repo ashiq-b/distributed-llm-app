@@ -2,28 +2,24 @@
 // The real UI replaces this in Phase 4.
 import { useEffect, useState } from "react";
 import {
-  deviceInfo, workerStart, workerStatus, hostLoad, hostGenerate, hostCancel, hostUnload,
-  onLoadProgress, onToken, catalog, modelDownload, modelCancelDownload, modelDelete, onDownloadProgress,
-  type DeviceInfo, type WorkerStatus, type DeviceShare, type GenSummary, type ModelView, type DownloadProgress,
+  deviceInfo, roleState, becomeWorker, becomeHost, leaveRole, onRoleChanged,
+  chatSend, chatStop, chatHistory, chatReset, onToken,
+  catalog, modelDownload, modelCancelDownload, modelDelete, onDownloadProgress,
+  type DeviceInfo, type GenSummary, type ModelView, type DownloadProgress, type RoleState,
   type ChatMessage, discoveryStart, addManualPeer, onPeersChanged, type PeerView,
 } from "./lib/tauri";
-
-// Reasoning ("<think>…</think>") is shown but not sent back as history: it wastes context.
-const withoutThinking = (text: string) => text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 
 const mb = (bytes: number) => `${(bytes / 1e6).toFixed(0)} MB`;
 
 export default function App() {
   const [info, setInfo] = useState<DeviceInfo | null>(null);
-  const [worker, setWorker] = useState<WorkerStatus | null>(null);
+  const [role, setRole] = useState<RoleState>({ role: "idle" });
   const [models, setModels] = useState<ModelView[]>([]);
   const [dl, setDl] = useState<Record<string, DownloadProgress>>({});
   const [modelId, setModelId] = useState("");
-  const [endpoints, setEndpoints] = useState("");
+  const [chosen, setChosen] = useState<string[]>([]);
   const [peers, setPeers] = useState<PeerView[]>([]);
   const [manualAddr, setManualAddr] = useState("");
-  const [progress, setProgress] = useState<number | null>(null);
-  const [shares, setShares] = useState<DeviceShare[]>([]);
   const [prompt, setPrompt] = useState("");
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [reply, setReply] = useState("");
@@ -33,12 +29,12 @@ export default function App() {
 
   useEffect(() => {
     deviceInfo().then(setInfo).catch((e) => setError(String(e)));
-    workerStatus().then(setWorker).catch((e) => setError(String(e)));
+    roleState().then(setRole).catch((e) => setError(String(e)));
     refreshModels();
     discoveryStart().then(setPeers).catch((e) => setError(String(e)));
     const un = [
       onPeersChanged(setPeers),
-      onLoadProgress(setProgress),
+      onRoleChanged((s) => { setRole(s); chatHistory().then(setHistory); }),
       onToken((p) => setReply((r) => r + p)),
       onDownloadProgress((p) => setDl((d) => ({ ...d, [p.id]: p }))),
     ];
@@ -66,6 +62,8 @@ export default function App() {
     try { await f(); } catch (e) { setError(String(e)); } finally { setBusy(false); }
   };
 
+  const shares = role.role === "host" ? role.shares : [];
+
   return (
     <main style={{ fontFamily: "system-ui", padding: 16, maxWidth: 760 }}>
       <h2>This device</h2>
@@ -75,14 +73,14 @@ export default function App() {
         </p>
       )}
 
-      <h2>Worker</h2>
-      <button disabled={busy || !!worker} onClick={() => run(async () => setWorker(await workerStart(50052)))}>
+      <h2>Role: {role.role}</h2>
+      <button disabled={busy || role.role !== "idle"} onClick={() => run(async () => setRole(await becomeWorker()))}>
         Start worker
       </button>
       <p>
-        {worker
-          ? `Running on ${worker.endpoint} · ${worker.device} · free ${worker.free_mb ?? "unknown"} MiB (stays on until the app is closed)`
-          : "Not running"}
+        {role.role === "worker"
+          ? `Running on ${role.status.endpoint} · ${role.status.device} · free ${role.status.free_mb ?? "unknown"} MiB (stays on until the app is closed)`
+          : "Not a worker"}
       </p>
 
       <h2>Models</h2>
@@ -117,10 +115,12 @@ export default function App() {
           <div key={p.id}>
             {p.name} · {p.platform ?? "unknown"} · {p.role ?? "unknown"} · {ep} · free{" "}
             {p.free_mem_mb ?? "unknown"} MiB · {p.compat}{" "}
-            <button disabled={p.compat === "proto_mismatch" || p.compat === "app_version_mismatch"}
-              onClick={() => setEndpoints((cur) => cur.split(",").map((s) => s.trim()).includes(ep) ? cur : [cur, ep].filter(Boolean).join(", "))}>
-              Use as worker
-            </button>
+            <label>
+              <input type="checkbox" checked={chosen.includes(p.id)}
+                disabled={p.compat === "proto_mismatch" || p.compat === "app_version_mismatch"}
+                onChange={(e) => setChosen((c) => e.target.checked ? [...c, p.id] : c.filter((id) => id !== p.id))} />
+              use as worker
+            </label>
           </div>
         );
       })}
@@ -137,18 +137,14 @@ export default function App() {
           <option key={m.id} value={m.id}>{m.name}{m.status.state === "ready" ? "" : " (not downloaded)"}</option>
         ))}
       </select>{" "}
-      <input placeholder="workers: 192.168.1.20:50052, …" value={endpoints} size={36}
-        onChange={(e) => setEndpoints(e.target.value)} />{" "}
-      <button disabled={busy} onClick={() => run(async () => {
-        setShares([]);
-        setProgress(0);
-        const eps = endpoints.split(",").map((s) => s.trim()).filter(Boolean);
-        setShares(await hostLoad(modelId, eps));
+      {" "}with {chosen.filter((id) => peers.some((p) => p.id === id)).length} worker(s){" "}
+      <button disabled={busy || role.role === "worker" || role.role === "loading"} onClick={() => run(async () => {
+        await becomeHost(modelId, chosen.filter((id) => peers.some((p) => p.id === id)));
       })}>Load</button>{" "}
-      <button disabled={busy} onClick={() => run(async () => { await hostUnload(); setShares([]); setProgress(null); })}>
+      <button disabled={busy || role.role !== "host"} onClick={() => run(async () => setRole(await leaveRole()))}>
         Unload
       </button>
-      {progress !== null && <p>Load progress: {Math.round(progress * 100)}%</p>}
+      {role.role === "loading" && <p>Loading {role.model_id}: {Math.round(role.frac * 100)}%</p>}
       {shares.length > 0 && (
         <table cellPadding={4}>
           <thead><tr><th align="left">Device</th><th>Where</th><th>Layers</th><th align="right">MiB</th></tr></thead>
@@ -165,29 +161,28 @@ export default function App() {
         </table>
       )}
 
-      <h2>Chat</h2>
+      <h2>Chat{role.role === "host" ? ` · ${role.model_id}` : ""}</h2>
       {history.map((m, i) => (
         <p key={i} style={{ whiteSpace: "pre-wrap" }}><b>{m.role === "user" ? "You" : "Model"}:</b> {m.content}</p>
       ))}
       <input placeholder="Ask something" value={prompt} size={50} onChange={(e) => setPrompt(e.target.value)} />{" "}
-      <button disabled={busy || shares.length === 0 || !prompt} onClick={() => run(async () => {
-        const turn: ChatMessage[] = [...history, { role: "user", content: prompt }];
-        setHistory(turn);
+      <button disabled={busy || role.role !== "host" || !prompt} onClick={() => run(async () => {
+        const text = prompt;
+        setHistory((h) => [...h, { role: "user", content: text }]);
         setPrompt("");
         setReply("");
         setSummary(null);
-        let text = "";
-        const unlisten = await onToken((p) => { text += p; });
         try {
-          setSummary(await hostGenerate(turn));
-          setHistory([...turn, { role: "assistant", content: withoutThinking(text) }]);
+          setSummary(await chatSend(text));
           setReply("");
         } finally {
-          unlisten();
+          setHistory(await chatHistory());
         }
       })}>Send</button>{" "}
-      <button onClick={() => hostCancel()}>Stop</button>{" "}
-      <button disabled={busy} onClick={() => { setHistory([]); setReply(""); setSummary(null); }}>New chat</button>
+      <button onClick={() => chatStop()}>Stop</button>{" "}
+      <button disabled={busy} onClick={() => run(async () => {
+        await chatReset(); setHistory([]); setReply(""); setSummary(null);
+      })}>New chat</button>
       {reply && <pre style={{ whiteSpace: "pre-wrap" }}>{reply}</pre>}
       {summary && <p>{summary.tokens} tokens in {(summary.millis / 1000).toFixed(1)} s · stopped: {summary.stopped}</p>}
 
