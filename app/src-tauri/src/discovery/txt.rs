@@ -26,20 +26,32 @@ impl DeviceRole {
     }
 }
 
-/// Another device on the network, as it describes itself.
+/// How we learned about a peer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PeerSource {
+    /// It announced itself (mDNS / Bonjour).
+    Mdns,
+    /// Typed in by the user; only its address and port are known.
+    Manual,
+}
+
+/// Another device on the network, as it describes itself. `None` means the peer
+/// didn't tell us (manual peers): shown as unknown, never guessed.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PeerInfo {
     /// Stable per-install id, so a peer that changes IP is still the same peer.
     pub id: String,
     pub name: String,
-    pub platform: String,
-    pub app_ver: String,
-    pub proto: String,
+    pub platform: Option<String>,
+    pub app_ver: Option<String>,
+    pub proto: Option<String>,
     pub rpc_port: u16,
-    /// `None` when the peer didn't report it: shown as unknown, never as 0.
+    /// Never 0 when unknown.
     pub free_mem_mb: Option<u64>,
-    pub role: DeviceRole,
+    pub role: Option<DeviceRole>,
     pub addr: IpAddr,
+    pub source: PeerSource,
     #[serde(skip)]
     pub last_seen: Instant,
 }
@@ -50,6 +62,15 @@ pub enum Compat {
     Ok,
     AppVersionMismatch,
     ProtoMismatch,
+    /// The peer didn't announce its versions (manual peer).
+    Unknown,
+}
+
+impl Compat {
+    /// Known to be unable to work with this device.
+    pub fn is_incompatible(self) -> bool {
+        matches!(self, Compat::AppVersionMismatch | Compat::ProtoMismatch)
+    }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -61,22 +82,22 @@ pub enum TxtError {
 }
 
 pub fn encode_txt(peer: &PeerInfo) -> Vec<(String, String)> {
-    let mut txt = vec![
-        ("id", peer.id.clone()),
-        ("name", peer.name.clone()),
+    let optional = [
         ("platform", peer.platform.clone()),
         ("app_ver", peer.app_ver.clone()),
         ("proto", peer.proto.clone()),
-        ("rpc_port", peer.rpc_port.to_string()),
-        ("role", peer.role.as_str().to_string()),
+        ("role", peer.role.map(|r| r.as_str().to_string())),
+        ("free_mem_mb", peer.free_mem_mb.map(|mb| mb.to_string())),
     ];
-    if let Some(mb) = peer.free_mem_mb {
-        txt.push(("free_mem_mb", mb.to_string()));
-    }
-    txt.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+    [("id", peer.id.clone()), ("name", peer.name.clone()), ("rpc_port", peer.rpc_port.to_string())]
+        .into_iter()
+        .chain(optional.into_iter().filter_map(|(k, v)| v.map(|v| (k, v))))
+        .map(|(k, v)| (k.to_string(), v))
+        .collect()
 }
 
-/// Decode a peer's TXT record. Unknown keys are ignored, so newer versions can add keys.
+/// Decode an announced TXT record. Everything but `free_mem_mb` is required.
+/// Unknown keys are ignored, so newer versions can add keys.
 pub fn decode_txt(txt: &[(String, String)], addr: IpAddr) -> Result<PeerInfo, TxtError> {
     let get = |key: &'static str| txt.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
     let req = |key: &'static str| get(key).filter(|v| !v.is_empty()).map(str::to_string).ok_or(TxtError::Missing(key));
@@ -97,13 +118,14 @@ pub fn decode_txt(txt: &[(String, String)], addr: IpAddr) -> Result<PeerInfo, Tx
     Ok(PeerInfo {
         id: req("id")?,
         name: req("name")?,
-        platform: req("platform")?,
-        app_ver: req("app_ver")?,
-        proto: req("proto")?,
+        platform: Some(req("platform")?),
+        app_ver: Some(req("app_ver")?),
+        proto: Some(req("proto")?),
         rpc_port,
         free_mem_mb,
-        role,
+        role: Some(role),
         addr,
+        source: PeerSource::Mdns,
         last_seen: Instant::now(),
     })
 }
@@ -111,12 +133,11 @@ pub fn decode_txt(txt: &[(String, String)], addr: IpAddr) -> Result<PeerInfo, Tx
 /// Devices work together only on the same RPC protocol and the same app version.
 /// A protocol mismatch is reported first: it is the one that would break the split.
 pub fn compatibility(peer: &PeerInfo, local: &DeviceInfo) -> Compat {
-    if peer.proto != local.proto {
-        Compat::ProtoMismatch
-    } else if peer.app_ver != local.app_ver {
-        Compat::AppVersionMismatch
-    } else {
-        Compat::Ok
+    match (peer.proto.as_deref(), peer.app_ver.as_deref()) {
+        (Some(p), _) if p != local.proto => Compat::ProtoMismatch,
+        (_, Some(a)) if a != local.app_ver => Compat::AppVersionMismatch,
+        (Some(_), Some(_)) => Compat::Ok,
+        _ => Compat::Unknown,
     }
 }
 
@@ -132,13 +153,14 @@ mod tests {
         PeerInfo {
             id: "a1b2".into(),
             name: "iPhone15,4".into(),
-            platform: "ios".into(),
-            app_ver: "0.1.0".into(),
-            proto: "10.0.0".into(),
+            platform: Some("ios".into()),
+            app_ver: Some("0.1.0".into()),
+            proto: Some("10.0.0".into()),
             rpc_port: 50052,
             free_mem_mb: Some(3901),
-            role: DeviceRole::Worker,
+            role: Some(DeviceRole::Worker),
             addr: "192.168.1.4".parse().unwrap(),
+            source: PeerSource::Mdns,
             last_seen: Instant::now(),
         }
     }
@@ -169,18 +191,25 @@ mod tests {
 
     #[test]
     fn proto_mismatch_is_incompatible() {
-        let p = PeerInfo { proto: "9.0.0".into(), ..peer() };
+        let p = PeerInfo { proto: Some("9.0.0".into()), ..peer() };
         assert_eq!(compatibility(&p, &local()), Compat::ProtoMismatch);
         // Reported even when the app version differs too.
-        let p = PeerInfo { proto: "9.0.0".into(), app_ver: "0.2.0".into(), ..peer() };
+        let p = PeerInfo { proto: Some("9.0.0".into()), app_ver: Some("0.2.0".into()), ..peer() };
         assert_eq!(compatibility(&p, &local()), Compat::ProtoMismatch);
         assert_eq!(compatibility(&peer(), &local()), Compat::Ok);
     }
 
     #[test]
     fn app_ver_mismatch_is_incompatible() {
-        let p = PeerInfo { app_ver: "0.2.0".into(), ..peer() };
+        let p = PeerInfo { app_ver: Some("0.2.0".into()), ..peer() };
         assert_eq!(compatibility(&p, &local()), Compat::AppVersionMismatch);
+    }
+
+    #[test]
+    fn unannounced_versions_are_unknown_not_incompatible() {
+        let p = PeerInfo { proto: None, app_ver: None, source: PeerSource::Manual, ..peer() };
+        assert_eq!(compatibility(&p, &local()), Compat::Unknown);
+        assert!(!Compat::Unknown.is_incompatible());
     }
 
     #[test]

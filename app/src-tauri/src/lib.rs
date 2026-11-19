@@ -1,3 +1,5 @@
+use tauri::Manager;
+
 mod commands;
 mod device_info;
 mod discovery;
@@ -9,7 +11,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(commands::EngineState::default())
         .manage(commands::DownloadState::default())
-        .manage(discovery::PeerTable::default())
+        .setup(|app| {
+            let id = discovery::load_or_create_id(&app.path().app_data_dir()?)?;
+            app.manage(discovery::Discovery::new(id));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::device_info,
             commands::worker_start,
@@ -19,6 +25,9 @@ pub fn run() {
             commands::host_cancel,
             commands::host_unload,
             commands::device_shares,
+            commands::discovery_start,
+            commands::discovery_peers,
+            commands::add_manual_peer,
             commands::catalog,
             commands::model_state,
             commands::model_download,

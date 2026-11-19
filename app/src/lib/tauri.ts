@@ -55,6 +55,32 @@ export const onLoadProgress = (cb: (frac: number) => void): Promise<UnlistenFn> 
 export const onToken = (cb: (piece: string) => void): Promise<UnlistenFn> =>
   listen<{ piece: string }>("token", (e) => cb(e.payload.piece));
 
+// ---- Discovery ----
+
+export type DeviceRole = "idle" | "worker" | "host";
+export type Compat = "ok" | "app_version_mismatch" | "proto_mismatch" | "unknown";
+
+/** Another device. null = the device didn't say (manual peers): show "unknown". */
+export interface PeerView {
+  id: string;
+  name: string;
+  platform: string | null;
+  app_ver: string | null;
+  proto: string | null;
+  rpc_port: number;
+  free_mem_mb: number | null;
+  role: DeviceRole | null;
+  addr: string;
+  source: "mdns" | "manual";
+  compat: Compat;
+}
+
+export const discoveryStart = () => invoke<PeerView[]>("discovery_start");
+export const discoveryPeers = () => invoke<PeerView[]>("discovery_peers");
+export const addManualPeer = (addr: string) => invoke<PeerView>("add_manual_peer", { addr });
+export const onPeersChanged = (cb: (peers: PeerView[]) => void): Promise<UnlistenFn> =>
+  listen<{ peers: PeerView[] }>("peers-changed", (e) => cb(e.payload.peers));
+
 // ---- Models ----
 
 export type ModelState =

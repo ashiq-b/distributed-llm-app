@@ -12,7 +12,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::device_info::{device_info as read_device_info, DeviceInfo};
-use crate::discovery::{self, PeerTable};
+use crate::discovery::{self, mdns, DeviceRole, Discovery, PeerView};
 use crate::models::{self, download, ModelEntry, ModelState};
 
 /// Engine objects owned by the app. One worker and one host per process (engine rule).
@@ -47,6 +47,11 @@ struct DownloadProgress {
 #[derive(Clone, Serialize)]
 struct LoadProgress {
     frac: f32,
+}
+
+#[derive(Clone, Serialize)]
+struct PeersChanged {
+    peers: Vec<PeerView>,
 }
 
 #[derive(Clone, Serialize)]
@@ -85,6 +90,16 @@ pub async fn worker_start(app: AppHandle, port: u16) -> Result<WorkerStatus, Str
             .map_err(|e| e.to_string())?;
         let status = w.status();
         *worker = Some(w);
+        // Announce ourselves as a worker. Discovery failing must not stop the worker:
+        // others can still add this device by address.
+        let discovery = app.state::<Discovery>();
+        let announced = discovery.mdns().and_then(|m| {
+            let me = discovery.me(&read_device_info(), DeviceRole::Worker, port);
+            m.advertise(move || discovery_me_now(&me))
+        });
+        if let Err(e) = announced {
+            eprintln!("worker is not announced on the network: {e}");
+        }
         Ok(status)
     })
     .await
@@ -98,7 +113,7 @@ pub fn worker_status(state: State<'_, EngineState>) -> Option<WorkerStatus> {
 #[tauri::command]
 pub async fn host_load(app: AppHandle, model_id: String, endpoints: Vec<String>) -> Result<Vec<DeviceShare>, String> {
     let path = models::model_path(&models_dir(&app)?, &model_id)?;
-    discovery::check_endpoints(&endpoints, &app.state::<PeerTable>().snapshot(), &read_device_info())?;
+    discovery::check_endpoints(&endpoints, &app.state::<Discovery>().peers(), &read_device_info())?;
     blocking(move || {
         let state = app.state::<EngineState>();
         // Only one model at a time: unload the previous one before loading.
@@ -152,6 +167,46 @@ pub async fn host_unload(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn device_shares(state: State<'_, EngineState>) -> Vec<DeviceShare> {
     state.host.lock().unwrap().as_ref().map(|h| h.device_shares()).unwrap_or_default()
+}
+
+// ---- Discovery ---------------------------------------------------------------
+
+/// Refresh the announced values that change (free memory) on each heartbeat.
+fn discovery_me_now(me: &discovery::PeerInfo) -> discovery::PeerInfo {
+    discovery::PeerInfo { free_mem_mb: read_device_info().free_mem_mb, ..me.clone() }
+}
+
+fn emit_peers(app: &AppHandle, peers: Vec<discovery::PeerInfo>) {
+    let peers = discovery::views(app.state::<Discovery>().without_self(peers), &read_device_info());
+    let _ = app.emit("peers-changed", PeersChanged { peers });
+}
+
+/// Start looking for other devices (once). Emits `peers-changed` whenever the list changes.
+#[tauri::command]
+pub fn discovery_start(app: AppHandle) -> Result<Vec<PeerView>, String> {
+    let discovery = app.state::<Discovery>();
+    let emitter = app.clone();
+    discovery.mdns()?.browse(move |peers| emit_peers(&emitter, peers))?;
+    Ok(discovery::views(discovery.peers(), &read_device_info()))
+}
+
+#[tauri::command]
+pub fn discovery_peers(app: AppHandle) -> Vec<PeerView> {
+    discovery::views(app.state::<Discovery>().peers(), &read_device_info())
+}
+
+/// Add a device by address ("192.168.1.4" or "192.168.1.4:50052") after checking it
+/// accepts connections (within 5 s).
+#[tauri::command]
+pub async fn add_manual_peer(app: AppHandle, addr: String) -> Result<PeerView, String> {
+    blocking(move || {
+        let peer = mdns::probe_manual_peer(&addr)?;
+        let discovery = app.state::<Discovery>();
+        discovery.add(peer.clone());
+        emit_peers(&app, discovery.peers());
+        Ok(discovery::views(vec![peer], &read_device_info()).remove(0))
+    })
+    .await
 }
 
 // ---- Models ----------------------------------------------------------------

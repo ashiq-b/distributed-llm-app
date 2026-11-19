@@ -5,7 +5,7 @@ import {
   deviceInfo, workerStart, workerStatus, hostLoad, hostGenerate, hostCancel, hostUnload,
   onLoadProgress, onToken, catalog, modelDownload, modelCancelDownload, modelDelete, onDownloadProgress,
   type DeviceInfo, type WorkerStatus, type DeviceShare, type GenSummary, type ModelView, type DownloadProgress,
-  type ChatMessage,
+  type ChatMessage, discoveryStart, addManualPeer, onPeersChanged, type PeerView,
 } from "./lib/tauri";
 
 // Reasoning ("<think>…</think>") is shown but not sent back as history: it wastes context.
@@ -20,6 +20,8 @@ export default function App() {
   const [dl, setDl] = useState<Record<string, DownloadProgress>>({});
   const [modelId, setModelId] = useState("");
   const [endpoints, setEndpoints] = useState("");
+  const [peers, setPeers] = useState<PeerView[]>([]);
+  const [manualAddr, setManualAddr] = useState("");
   const [progress, setProgress] = useState<number | null>(null);
   const [shares, setShares] = useState<DeviceShare[]>([]);
   const [prompt, setPrompt] = useState("");
@@ -33,7 +35,9 @@ export default function App() {
     deviceInfo().then(setInfo).catch((e) => setError(String(e)));
     workerStatus().then(setWorker).catch((e) => setError(String(e)));
     refreshModels();
+    discoveryStart().then(setPeers).catch((e) => setError(String(e)));
     const un = [
+      onPeersChanged(setPeers),
       onLoadProgress(setProgress),
       onToken((p) => setReply((r) => r + p)),
       onDownloadProgress((p) => setDl((d) => ({ ...d, [p.id]: p }))),
@@ -104,6 +108,28 @@ export default function App() {
           </div>
         );
       })}
+
+      <h2>Devices on this network</h2>
+      {peers.length === 0 && <p>None found yet.</p>}
+      {peers.map((p) => {
+        const ep = `${p.addr}:${p.rpc_port}`;
+        return (
+          <div key={p.id}>
+            {p.name} · {p.platform ?? "unknown"} · {p.role ?? "unknown"} · {ep} · free{" "}
+            {p.free_mem_mb ?? "unknown"} MiB · {p.compat}{" "}
+            <button disabled={p.compat === "proto_mismatch" || p.compat === "app_version_mismatch"}
+              onClick={() => setEndpoints((cur) => cur.split(",").map((s) => s.trim()).includes(ep) ? cur : [cur, ep].filter(Boolean).join(", "))}>
+              Use as worker
+            </button>
+          </div>
+        );
+      })}
+      <input placeholder="add by address: 192.168.1.4" value={manualAddr} size={24}
+        onChange={(e) => setManualAddr(e.target.value)} />{" "}
+      <button disabled={busy || !manualAddr} onClick={() => run(async () => {
+        await addManualPeer(manualAddr);
+        setManualAddr("");
+      })}>Add</button>
 
       <h2>Host</h2>
       <select value={modelId} onChange={(e) => setModelId(e.target.value)}>
