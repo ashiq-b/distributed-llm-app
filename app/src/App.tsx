@@ -5,7 +5,11 @@ import {
   deviceInfo, workerStart, workerStatus, hostLoad, hostGenerate, hostCancel, hostUnload,
   onLoadProgress, onToken, catalog, modelDownload, modelCancelDownload, modelDelete, onDownloadProgress,
   type DeviceInfo, type WorkerStatus, type DeviceShare, type GenSummary, type ModelView, type DownloadProgress,
+  type ChatMessage,
 } from "./lib/tauri";
+
+// Reasoning ("<think>…</think>") is shown but not sent back as history: it wastes context.
+const withoutThinking = (text: string) => text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 
 const mb = (bytes: number) => `${(bytes / 1e6).toFixed(0)} MB`;
 
@@ -19,6 +23,7 @@ export default function App() {
   const [progress, setProgress] = useState<number | null>(null);
   const [shares, setShares] = useState<DeviceShare[]>([]);
   const [prompt, setPrompt] = useState("");
+  const [history, setHistory] = useState<ChatMessage[]>([]);
   const [reply, setReply] = useState("");
   const [summary, setSummary] = useState<GenSummary | null>(null);
   const [busy, setBusy] = useState(false);
@@ -135,14 +140,29 @@ export default function App() {
       )}
 
       <h2>Chat</h2>
+      {history.map((m, i) => (
+        <p key={i} style={{ whiteSpace: "pre-wrap" }}><b>{m.role === "user" ? "You" : "Model"}:</b> {m.content}</p>
+      ))}
       <input placeholder="Ask something" value={prompt} size={50} onChange={(e) => setPrompt(e.target.value)} />{" "}
       <button disabled={busy || shares.length === 0 || !prompt} onClick={() => run(async () => {
+        const turn: ChatMessage[] = [...history, { role: "user", content: prompt }];
+        setHistory(turn);
+        setPrompt("");
         setReply("");
         setSummary(null);
-        setSummary(await hostGenerate([{ role: "user", content: prompt }]));
+        let text = "";
+        const unlisten = await onToken((p) => { text += p; });
+        try {
+          setSummary(await hostGenerate(turn));
+          setHistory([...turn, { role: "assistant", content: withoutThinking(text) }]);
+          setReply("");
+        } finally {
+          unlisten();
+        }
       })}>Send</button>{" "}
-      <button onClick={() => hostCancel()}>Stop</button>
-      <pre style={{ whiteSpace: "pre-wrap" }}>{reply}</pre>
+      <button onClick={() => hostCancel()}>Stop</button>{" "}
+      <button disabled={busy} onClick={() => { setHistory([]); setReply(""); setSummary(null); }}>New chat</button>
+      {reply && <pre style={{ whiteSpace: "pre-wrap" }}>{reply}</pre>}
       {summary && <p>{summary.tokens} tokens in {(summary.millis / 1000).toFixed(1)} s · stopped: {summary.stopped}</p>}
 
       {error && <p style={{ color: "crimson" }}>Error: {error}</p>}
