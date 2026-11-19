@@ -1,7 +1,11 @@
-//! Finding other devices on the network: announced ones (mDNS, Bonjour on iOS in
-//! Task 3.3) and ones typed in by hand. Loading checks them before connecting.
+//! Finding other devices on the network: announced ones (mDNS; the system's Bonjour on
+//! iOS) and ones typed in by hand. Loading checks them before connecting.
 
+#[cfg(target_os = "ios")]
+pub mod bonjour;
+#[cfg(not(target_os = "ios"))]
 pub mod mdns;
+pub mod registry;
 pub mod txt;
 
 use std::hash::{BuildHasher, RandomState};
@@ -11,11 +15,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde::Serialize;
+use tauri::AppHandle;
 
 pub use txt::{compatibility, Compat, DeviceRole, PeerInfo, PeerSource};
 
 use crate::device_info::DeviceInfo;
-use mdns::{Mdns, PeerRegistry};
+use registry::PeerRegistry;
+
+#[cfg(not(target_os = "ios"))]
+pub type Backend = mdns::Mdns;
+#[cfg(target_os = "ios")]
+pub type Backend = bonjour::Bonjour;
 
 /// A peer as the UI sees it: what it announced, plus whether it can work with us.
 #[derive(Debug, Clone, Serialize)]
@@ -25,27 +35,33 @@ pub struct PeerView {
     pub compat: Compat,
 }
 
-/// Discovery for this app instance. Created at startup; mDNS starts on first use.
+/// Discovery for this app instance. Created at startup; the backend starts on first use.
 pub struct Discovery {
     /// This install's id, as announced. Used to leave ourselves out of the list.
     pub self_id: String,
     registry: Arc<Mutex<PeerRegistry>>,
-    mdns: Mutex<Option<Arc<Mdns>>>,
+    backend: Mutex<Option<Arc<Backend>>>,
 }
 
 impl Discovery {
     pub fn new(self_id: String) -> Discovery {
-        Discovery { self_id, registry: Arc::default(), mdns: Mutex::new(None) }
+        Discovery { self_id, registry: Arc::default(), backend: Mutex::new(None) }
     }
 
-    pub fn mdns(&self) -> Result<Arc<Mdns>, String> {
-        let mut mdns = self.mdns.lock().unwrap();
-        if let Some(m) = mdns.as_ref() {
-            return Ok(m.clone());
+    pub fn backend(&self, app: &AppHandle) -> Result<Arc<Backend>, String> {
+        let mut backend = self.backend.lock().unwrap();
+        if let Some(b) = backend.as_ref() {
+            return Ok(b.clone());
         }
-        let m = Arc::new(Mdns::new(self.registry.clone())?);
-        *mdns = Some(m.clone());
-        Ok(m)
+        #[cfg(target_os = "ios")]
+        let b = Arc::new(Backend::new(app.clone(), self.registry.clone())?);
+        #[cfg(not(target_os = "ios"))]
+        let b = {
+            let _ = app;
+            Arc::new(Backend::new(self.registry.clone())?)
+        };
+        *backend = Some(b.clone());
+        Ok(b)
     }
 
     /// Other devices (never this one), sorted by name.

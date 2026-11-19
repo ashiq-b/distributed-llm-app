@@ -12,7 +12,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::device_info::{device_info as read_device_info, DeviceInfo};
-use crate::discovery::{self, mdns, DeviceRole, Discovery, PeerView};
+use crate::discovery::{self, registry, DeviceRole, Discovery, PeerView};
 use crate::models::{self, download, ModelEntry, ModelState};
 
 /// Engine objects owned by the app. One worker and one host per process (engine rule).
@@ -93,13 +93,15 @@ pub async fn worker_start(app: AppHandle, port: u16) -> Result<WorkerStatus, Str
         // Announce ourselves as a worker. Discovery failing must not stop the worker:
         // others can still add this device by address.
         let discovery = app.state::<Discovery>();
-        let announced = discovery.mdns().and_then(|m| {
+        let announced = discovery.backend(&app).and_then(|m| {
             let me = discovery.me(&read_device_info(), DeviceRole::Worker, port);
             m.advertise(move || discovery_me_now(&me))
         });
         if let Err(e) = announced {
             eprintln!("worker is not announced on the network: {e}");
         }
+        drop(worker);
+        update_keep_awake(&app);
         Ok(status)
     })
     .await
@@ -118,6 +120,7 @@ pub async fn host_load(app: AppHandle, model_id: String, endpoints: Vec<String>)
         let state = app.state::<EngineState>();
         // Only one model at a time: unload the previous one before loading.
         state.host.lock().unwrap().take();
+        update_keep_awake(&app);
         let emitter = app.clone();
         let host = Host::load(&path, &endpoints, None, move |frac| {
             let _ = emitter.emit("load-progress", LoadProgress { frac });
@@ -125,6 +128,7 @@ pub async fn host_load(app: AppHandle, model_id: String, endpoints: Vec<String>)
         .map_err(|e| e.to_string())?;
         let shares = host.device_shares();
         *state.host.lock().unwrap() = Some(Arc::new(host));
+        update_keep_awake(&app);
         Ok(shares)
     })
     .await
@@ -142,6 +146,7 @@ pub async fn host_generate(app: AppHandle, messages: Vec<ChatMessage>) -> Result
             // The model is unusable once a worker is gone; release it so it can be reloaded.
             drop(host);
             app.state::<EngineState>().host.lock().unwrap().take();
+            update_keep_awake(&app);
         }
         result.map_err(|e| e.to_string())
     })
@@ -159,6 +164,7 @@ pub fn host_cancel(state: State<'_, EngineState>) {
 pub async fn host_unload(app: AppHandle) -> Result<(), String> {
     blocking(move || {
         app.state::<EngineState>().host.lock().unwrap().take();
+        update_keep_awake(&app);
         Ok(())
     })
     .await
@@ -167,6 +173,18 @@ pub async fn host_unload(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn device_shares(state: State<'_, EngineState>) -> Vec<DeviceShare> {
     state.host.lock().unwrap().as_ref().map(|h| h.device_shares()).unwrap_or_default()
+}
+
+/// Keep the screen on while this device is a worker or has a model loaded: a locked
+/// iPhone suspends the app and drops its connections. Desktop: nothing to do.
+/// Never call it on the main thread (the iOS plugin call waits for the main thread).
+fn update_keep_awake(app: &AppHandle) {
+    let state = app.state::<EngineState>();
+    let busy = state.worker.lock().unwrap().is_some() || state.host.lock().unwrap().is_some();
+    #[cfg(target_os = "ios")]
+    discovery::bonjour::set_keep_awake(app, busy);
+    #[cfg(not(target_os = "ios"))]
+    let _ = busy;
 }
 
 // ---- Discovery ---------------------------------------------------------------
@@ -182,12 +200,16 @@ fn emit_peers(app: &AppHandle, peers: Vec<discovery::PeerInfo>) {
 }
 
 /// Start looking for other devices (once). Emits `peers-changed` whenever the list changes.
+/// Async: on iOS the plugin call needs the main thread free.
 #[tauri::command]
-pub fn discovery_start(app: AppHandle) -> Result<Vec<PeerView>, String> {
-    let discovery = app.state::<Discovery>();
-    let emitter = app.clone();
-    discovery.mdns()?.browse(move |peers| emit_peers(&emitter, peers))?;
-    Ok(discovery::views(discovery.peers(), &read_device_info()))
+pub async fn discovery_start(app: AppHandle) -> Result<Vec<PeerView>, String> {
+    blocking(move || {
+        let discovery = app.state::<Discovery>();
+        let emitter = app.clone();
+        discovery.backend(&app)?.browse(move |peers| emit_peers(&emitter, peers))?;
+        Ok(discovery::views(discovery.peers(), &read_device_info()))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -200,7 +222,7 @@ pub fn discovery_peers(app: AppHandle) -> Vec<PeerView> {
 #[tauri::command]
 pub async fn add_manual_peer(app: AppHandle, addr: String) -> Result<PeerView, String> {
     blocking(move || {
-        let peer = mdns::probe_manual_peer(&addr)?;
+        let peer = registry::probe_manual_peer(&addr)?;
         let discovery = app.state::<Discovery>();
         discovery.add(peer.clone());
         emit_peers(&app, discovery.peers());

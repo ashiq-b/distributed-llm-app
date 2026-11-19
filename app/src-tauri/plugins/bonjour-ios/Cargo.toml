@@ -1,0 +1,14 @@
+[package]
+name = "tauri-plugin-bonjour-ios"
+version = "0.1.0"
+description = "iOS Bonjour (NetService) advertise/browse and keep-awake for DistLLM"
+edition = "2024"
+publish = false
+links = "tauri-plugin-bonjour-ios"
+
+[dependencies]
+tauri = "2"
+serde = "1"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

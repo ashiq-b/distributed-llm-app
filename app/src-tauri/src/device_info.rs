@@ -3,7 +3,8 @@ use serde::Serialize;
 /// What this device tells the UI (and, later, other devices) about itself.
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceInfo {
-    /// The OS's name for this device, e.g. "Ashiq's MacBook Pro".
+    /// The device's user-visible name (macOS: the Computer Name from Settings), else the
+    /// hostname, else the hardware model (e.g. "iPhone15,4").
     pub name: String,
     /// "macos" | "ios" | "android" | "windows" | "linux"
     pub platform: String,
@@ -16,7 +17,11 @@ pub struct DeviceInfo {
 
 pub fn device_info() -> DeviceInfo {
     DeviceInfo {
-        name: display_name(&gethostname::gethostname().to_string_lossy(), hardware_model().as_deref()),
+        name: display_name(
+            computer_name().as_deref(),
+            &gethostname::gethostname().to_string_lossy(),
+            hardware_model().as_deref(),
+        ),
         platform: std::env::consts::OS.to_string(),
         free_mem_mb: dl_engine::device_free_mb(),
         app_ver: env!("CARGO_PKG_VERSION").to_string(),
@@ -24,14 +29,50 @@ pub fn device_info() -> DeviceInfo {
     }
 }
 
-/// The OS hostname, unless the OS hides it (iOS apps only see "localhost"); then the
-/// hardware model the device reports (e.g. "iPhone15,4"). Never a made-up name.
-pub fn display_name(hostname: &str, hardware_model: Option<&str>) -> String {
+/// The computer name if the OS has one; else the hostname, unless it is hidden (iOS apps
+/// only see "localhost") or one a router made up from the network card's hardware
+/// address ("Unknown_1a:50:…"); then the hardware model. Never a made-up name.
+pub fn display_name(computer_name: Option<&str>, hostname: &str, hardware_model: Option<&str>) -> String {
+    if let Some(name) = computer_name.map(str::trim).filter(|n| !n.is_empty()) {
+        return name.to_string();
+    }
     let host = hostname.trim().trim_end_matches(".local");
-    if !host.is_empty() && host != "localhost" {
+    let router_made = host.starts_with("Unknown_") || host.matches(':').count() >= 5;
+    if !host.is_empty() && host != "localhost" && !router_made {
         return host.to_string();
     }
     hardware_model.filter(|m| !m.is_empty()).unwrap_or("unknown").to_string()
+}
+
+/// macOS's Computer Name (System Settings → General → About → Name).
+#[cfg(target_os = "macos")]
+fn computer_name() -> Option<String> {
+    use std::ffi::{c_char, c_void, CStr};
+    #[link(name = "SystemConfiguration", kind = "framework")]
+    unsafe extern "C" {
+        fn SCDynamicStoreCopyComputerName(store: *const c_void, encoding: *mut u32) -> *const c_void;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFStringGetCString(s: *const c_void, buf: *mut c_char, size: isize, encoding: u32) -> u8;
+        fn CFRelease(cf: *const c_void);
+    }
+    const UTF8: u32 = 0x0800_0100; // kCFStringEncodingUTF8
+    unsafe {
+        let name = SCDynamicStoreCopyComputerName(std::ptr::null(), std::ptr::null_mut());
+        if name.is_null() {
+            return None;
+        }
+        let mut buf = [0 as c_char; 256];
+        let ok = CFStringGetCString(name, buf.as_mut_ptr(), buf.len() as isize, UTF8) != 0;
+        CFRelease(name);
+        ok.then(|| CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn computer_name() -> Option<String> {
+    None
 }
 
 /// `hw.machine` on iOS ("iPhone15,4"); `hw.model` on macOS ("Mac16,12").
@@ -75,9 +116,17 @@ mod tests {
     #[test]
     fn name_uses_hardware_model_when_os_hides_the_hostname() {
         // iOS apps see "localhost"; never show that as a device name.
-        assert_eq!(display_name("localhost", Some("iPhone15,4")), "iPhone15,4");
-        assert_eq!(display_name("", Some("iPhone15,4")), "iPhone15,4");
-        assert_eq!(display_name("Ashiqs-MacBook-Air.local", Some("Mac16,12")), "Ashiqs-MacBook-Air");
-        assert_eq!(display_name("localhost", None), "unknown");
+        assert_eq!(display_name(None, "localhost", Some("iPhone15,4")), "iPhone15,4");
+        assert_eq!(display_name(None, "", Some("iPhone15,4")), "iPhone15,4");
+        assert_eq!(display_name(None, "Studio-Mac.local", Some("Mac16,12")), "Studio-Mac");
+        assert_eq!(display_name(None, "localhost", None), "unknown");
+    }
+
+    #[test]
+    fn name_prefers_computer_name_and_skips_router_made_hostnames() {
+        assert_eq!(display_name(Some("Studio Mac"), "Unknown_1a:50:31:c3:25:31", Some("Mac16,12")), "Studio Mac");
+        assert_eq!(display_name(Some("  "), "Studio-Mac", None), "Studio-Mac");
+        // A DHCP name built from the network card's address is neither friendly nor private.
+        assert_eq!(display_name(None, "Unknown_1a:50:31:c3:25:31", Some("Mac16,12")), "Mac16,12");
     }
 }

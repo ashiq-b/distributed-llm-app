@@ -7,8 +7,10 @@ mod models;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    #[cfg(target_os = "ios")]
+    let builder = builder.plugin(tauri_plugin_bonjour_ios::init());
+    builder
         .manage(commands::EngineState::default())
         .manage(commands::DownloadState::default())
         .setup(|app| {

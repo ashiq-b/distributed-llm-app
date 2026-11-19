@@ -7,102 +7,23 @@
 //! device re-announces every `HEARTBEAT` with a `seq` counter in its TXT record, and
 //! a peer is dropped `PEER_TTL` after its last announcement.
 
-use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mdns_sd::{RecvTimeoutError, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
 
-use super::txt::{decode_txt, encode_txt, PeerInfo, PeerSource};
+use super::registry::{preferred_addr, PeerRegistry, HEARTBEAT};
+use super::txt::{decode_txt, encode_txt, PeerInfo};
 
 pub const SERVICE_TYPE: &str = "_distllm._tcp.local.";
-pub const DEFAULT_RPC_PORT: u16 = 50052;
-pub const HEARTBEAT: Duration = Duration::from_secs(5);
-pub const PEER_TTL: Duration = Duration::from_secs(15);
-pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Known peers, by id. The clock is passed in so expiry can be tested.
-#[derive(Default)]
-pub struct PeerRegistry {
-    peers: HashMap<String, PeerInfo>,
-    /// mDNS instance fullname → peer id, for goodbye ("removed") events.
-    fullnames: HashMap<String, String>,
-}
-
-impl PeerRegistry {
-    /// Add or refresh a peer. Returns true if the visible list changed.
-    pub fn upsert(&mut self, fullname: Option<&str>, peer: PeerInfo) -> bool {
-        if let Some(fullname) = fullname {
-            self.fullnames.insert(fullname.to_string(), peer.id.clone());
-        }
-        let changed = match self.peers.get(&peer.id) {
-            Some(old) => PeerInfo { last_seen: old.last_seen, ..peer.clone() } != *old,
-            None => true,
-        };
-        self.peers.insert(peer.id.clone(), peer);
-        changed
-    }
-
-    /// The peer said goodbye. Returns true if it was listed.
-    pub fn remove_fullname(&mut self, fullname: &str) -> bool {
-        self.fullnames.remove(fullname).is_some_and(|id| self.peers.remove(&id).is_some())
-    }
-
-    /// Drop announced peers not heard from within `PEER_TTL`. Manual peers stay.
-    pub fn expire(&mut self, now: Instant) -> bool {
-        let before = self.peers.len();
-        self.peers.retain(|_, p| p.source == PeerSource::Manual || now.saturating_duration_since(p.last_seen) <= PEER_TTL);
-        let peers = &self.peers;
-        self.fullnames.retain(|_, id| peers.contains_key(id));
-        self.peers.len() != before
-    }
-
-    /// All peers, sorted by name.
-    pub fn list(&self) -> Vec<PeerInfo> {
-        let mut peers: Vec<PeerInfo> = self.peers.values().cloned().collect();
-        peers.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
-        peers
-    }
-}
-
-/// Check that something accepts TCP at `addr` ("192.168.1.4" or "192.168.1.4:50052")
-/// within `PROBE_TIMEOUT`, and describe it as a manual peer. Only the address and
-/// port are known; everything else stays `None`.
-pub fn probe_manual_peer(addr: &str) -> Result<PeerInfo, String> {
-    let addr = addr.trim();
-    let sock = addr
-        .parse::<SocketAddr>()
-        .or_else(|_| addr.parse::<IpAddr>().map(|ip| SocketAddr::new(ip, DEFAULT_RPC_PORT)))
-        .map_err(|_| format!("not an IP address: {addr:?} (expected e.g. 192.168.1.4 or 192.168.1.4:50052)"))?;
-    TcpStream::connect_timeout(&sock, PROBE_TIMEOUT).map_err(|e| format!("cannot reach {sock}: {e}"))?;
-    Ok(PeerInfo {
-        id: format!("manual:{sock}"),
-        name: sock.to_string(),
-        platform: None,
-        app_ver: None,
-        proto: None,
-        rpc_port: sock.port(),
-        free_mem_mb: None,
-        role: None,
-        addr: sock.ip(),
-        source: PeerSource::Manual,
-        last_seen: Instant::now(),
-    })
-}
-
-/// A resolved announcement → peer. Prefers an IPv4 LAN address (what RPC connects to).
+/// A resolved announcement → peer.
 fn peer_from(svc: &ResolvedService) -> Option<PeerInfo> {
     let txt: Vec<(String, String)> =
         svc.txt_properties.iter().map(|p| (p.key().to_string(), p.val_str().to_string())).collect();
     let addrs: Vec<IpAddr> = svc.addresses.iter().map(|a| a.to_ip_addr()).collect();
-    let addr = addrs
-        .iter()
-        .find(|a| a.is_ipv4() && !a.is_loopback())
-        .or_else(|| addrs.iter().find(|a| a.is_ipv4()))
-        .or_else(|| addrs.first())?;
-    decode_txt(&txt, *addr).ok()
+    decode_txt(&txt, preferred_addr(&addrs)?).ok()
 }
 
 /// Advertising and browsing on one mDNS daemon.
@@ -205,7 +126,8 @@ impl Mdns {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discovery::txt::DeviceRole;
+    use crate::discovery::registry::DEFAULT_RPC_PORT;
+    use crate::discovery::txt::{DeviceRole, PeerSource};
 
     fn peer(id: &str, ip: &str) -> PeerInfo {
         PeerInfo {
@@ -270,56 +192,4 @@ mod tests {
         assert!(later > first, "last_seen was not refreshed by the heartbeat");
     }
 
-    #[test]
-    fn peer_expires_after_ttl() {
-        let t0 = Instant::now();
-        let mut reg = PeerRegistry::default();
-        assert!(reg.upsert(Some("a._distllm._tcp.local."), PeerInfo { last_seen: t0, ..peer("a", "192.168.1.4") }));
-        let manual = PeerInfo { source: PeerSource::Manual, last_seen: t0, ..peer("manual:192.168.1.9:50052", "192.168.1.9") };
-        assert!(reg.upsert(None, manual));
-
-        // A heartbeat with the same values refreshes it without changing the list.
-        assert!(!reg.upsert(Some("a._distllm._tcp.local."), PeerInfo { last_seen: t0 + Duration::from_secs(10), ..peer("a", "192.168.1.4") }));
-        assert!(!reg.expire(t0 + Duration::from_secs(20)), "refreshed at 10 s, so still alive at 20 s");
-        assert_eq!(reg.list().len(), 2);
-
-        assert!(reg.expire(t0 + Duration::from_secs(26)));
-        let left = reg.list();
-        assert_eq!(left.len(), 1, "manual peers don't expire");
-        assert_eq!(left[0].source, PeerSource::Manual);
-    }
-
-    #[test]
-    fn goodbye_removes_peer_and_changed_values_are_a_change() {
-        let mut reg = PeerRegistry::default();
-        reg.upsert(Some("a._distllm._tcp.local."), peer("a", "192.168.1.4"));
-        assert!(reg.upsert(Some("a._distllm._tcp.local."), PeerInfo { free_mem_mb: Some(7000), ..peer("a", "192.168.1.4") }));
-        assert!(reg.upsert(Some("a._distllm._tcp.local."), peer("a", "192.168.1.7")), "a new IP is a change");
-        assert!(reg.remove_fullname("a._distllm._tcp.local."));
-        assert!(!reg.remove_fullname("a._distllm._tcp.local."));
-        assert!(reg.list().is_empty());
-    }
-
-    #[test]
-    fn manual_peer_dead_endpoint_errors_within_5s() {
-        // Refused at once (nothing listens on port 1).
-        assert!(probe_manual_peer("127.0.0.1:1").is_err());
-        // No reply at all (TEST-NET-1, never routed): must give up on time, not hang.
-        let t = Instant::now();
-        let err = probe_manual_peer("192.0.2.1:50052").unwrap_err();
-        assert!(t.elapsed() < Duration::from_millis(5500), "took {:?}", t.elapsed());
-        assert!(err.contains("192.0.2.1:50052"), "{err}");
-        assert!(probe_manual_peer("not an address").is_err());
-    }
-
-    #[test]
-    fn manual_peer_reports_only_what_is_known() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let p = probe_manual_peer(&format!("127.0.0.1:{port}")).unwrap();
-        assert_eq!(p.name, format!("127.0.0.1:{port}"));
-        assert_eq!((p.addr, p.rpc_port), ("127.0.0.1".parse().unwrap(), port));
-        assert_eq!(p.source, PeerSource::Manual);
-        assert_eq!((p.free_mem_mb, p.proto, p.app_ver, p.platform, p.role), (None, None, None, None, None));
-    }
 }

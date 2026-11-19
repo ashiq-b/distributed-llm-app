@@ -833,6 +833,7 @@ dependencies = [
  "sha2 0.10.9",
  "tauri",
  "tauri-build",
+ "tauri-plugin-bonjour-ios",
  "tauri-plugin-opener",
  "thiserror 2.0.21",
  "ureq",
@@ -3849,6 +3850,15 @@ dependencies = [
  "serde_json",
  "tauri-utils",
  "walkdir",
+]
+
+[[package]]
+name = "tauri-plugin-bonjour-ios"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]
