@@ -2,8 +2,7 @@
 //! the way to Host). Pure state rules plus the memory guard; `commands.rs` runs the
 //! engine and reports each change as a `role-changed` event.
 //!
-//! A worker can't be stopped (llama.cpp's RPC server has no stop call; Task 1.1), so a
-//! device that became a worker stays one until the app is closed.
+//! A worker goes back to Idle before it can host (the caller stops its RPC server first).
 
 use dl_engine::{DeviceShare, LoadReport, WorkerStatus};
 use serde::Serialize;
@@ -19,7 +18,7 @@ pub enum RoleState {
     Host { model_id: String, shares: Vec<DeviceShare>, load: LoadReport },
 }
 
-pub const WORKER_STAYS: &str = "this device is a worker until the app is closed; reopen the app to change role";
+pub const WORKER_FIRST: &str = "this device is a worker; switch it to Idle before loading a model";
 
 #[derive(Debug)]
 pub struct Roles {
@@ -70,7 +69,7 @@ impl Roles {
                 Ok(())
             }
             RoleState::Loading { model_id, .. } => Err(format!("already loading {model_id}")),
-            RoleState::Worker { .. } => Err(WORKER_STAYS.into()),
+            RoleState::Worker { .. } => Err(WORKER_FIRST.into()),
         }
     }
 
@@ -94,15 +93,15 @@ impl Roles {
         };
     }
 
-    /// Back to Idle: unload the model. Refused while loading or as a worker.
+    /// Back to Idle: unload the model, or stop being a worker (the caller has stopped the
+    /// RPC server). Refused while loading.
     pub fn leave(&mut self) -> Result<(), String> {
         match &self.state {
-            RoleState::Idle | RoleState::Host { .. } => {
+            RoleState::Idle | RoleState::Host { .. } | RoleState::Worker { .. } => {
                 self.state = RoleState::Idle;
                 Ok(())
             }
             RoleState::Loading { model_id, .. } => Err(format!("still loading {model_id}")),
-            RoleState::Worker { .. } => Err(WORKER_STAYS.into()),
         }
     }
 
@@ -142,18 +141,20 @@ mod tests {
     }
 
     #[test]
-    fn role_transitions_follow_the_worker_stop_rule() {
+    fn role_transitions() {
         let mut r = Roles::default();
         assert_eq!(*r.state(), RoleState::Idle);
         assert_eq!(r.leave(), Ok(()), "leaving Idle is a no-op");
 
-        // Idle → Worker; starting again is fine; but a worker can't be stopped.
+        // Idle → Worker; starting again is fine; a worker must go Idle before it hosts.
         assert_eq!(r.can_become_worker(), Ok(()));
         r.set_worker(status());
         assert_eq!(r.can_become_worker(), Ok(()));
-        assert_eq!(r.leave(), Err(WORKER_STAYS.into()));
-        assert_eq!(r.begin_loading("lfm3-1.7b"), Err(WORKER_STAYS.into()));
+        assert_eq!(r.begin_loading("lfm3-1.7b"), Err(WORKER_FIRST.into()));
         assert!(matches!(r.state(), RoleState::Worker { .. }));
+        assert_eq!(r.leave(), Ok(()));
+        assert_eq!(*r.state(), RoleState::Idle, "Worker → Idle");
+        r.begin_loading("lfm3-1.7b").unwrap();
 
         // Idle → Loading → Host → Idle.
         let mut r = Roles::default();

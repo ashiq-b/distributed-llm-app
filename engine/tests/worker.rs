@@ -12,13 +12,14 @@ fn config(port: u16) -> WorkerConfig {
     WorkerConfig { bind_host: "127.0.0.1".into(), port, cache_dir: None, threads: None }
 }
 
-// One RPC server per process (llama.cpp has no stop API), so both scenarios
-// run in a single test, in order: port-in-use first, then a real start.
+// One RPC server per process, so the scenarios run in a single test, in order:
+// port-in-use, a real start, a real split, then stop and start again.
 #[test]
 fn worker_lifecycle() {
     worker_rejects_port_in_use();
-    let port = worker_accepts_tcp();
+    let (worker, port) = worker_accepts_tcp();
     worker_serves_real_split(port);
+    worker_stops_and_starts_again(worker, port);
 }
 
 fn worker_rejects_port_in_use() {
@@ -30,7 +31,7 @@ fn worker_rejects_port_in_use() {
     }
 }
 
-fn worker_accepts_tcp() -> u16 {
+fn worker_accepts_tcp() -> (Worker, u16) {
     let port = free_port();
     let worker = Worker::start(config(port)).expect("worker should start");
     let addr = format!("127.0.0.1:{port}").parse().unwrap();
@@ -45,7 +46,31 @@ fn worker_accepts_tcp() -> u16 {
         Err(EngineError::AlreadyRunning) => {}
         other => panic!("expected Err(AlreadyRunning), got {other:?}"),
     }
-    port
+    (worker, port)
+}
+
+/// Stopping ends a connected host's session and frees the port; the device can then be a
+/// worker again on the same port.
+fn worker_stops_and_starts_again(worker: Worker, port: u16) {
+    use std::io::Read;
+    let addr = format!("127.0.0.1:{port}").parse().unwrap();
+    let mut host = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).unwrap();
+    let t = std::time::Instant::now();
+    while worker.clients() == 0 {
+        assert!(t.elapsed() < Duration::from_secs(3), "connected host not counted");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    worker.stop().expect("worker should stop");
+    host.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    assert_eq!(host.read(&mut [0u8; 1]).expect("host connection should be closed, not hang"), 0);
+    assert!(TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_err(), "port still accepting after stop");
+
+    let again = Worker::start(config(port)).expect("worker should start again after stop");
+    TcpStream::connect_timeout(&addr, Duration::from_secs(2)).expect("restarted worker should accept TCP");
+    assert!(again.status().running);
+    again.stop().unwrap();
+    assert!(!Worker::start(config(port)).unwrap().status().endpoint.is_empty());
 }
 
 /// The in-process worker must actually hold part of a model for a real host.

@@ -18,7 +18,7 @@ export function unavailable(p: PeerView, local: DeviceInfo | null): string | nul
       return `Different app version (${p.app_ver ?? UNKNOWN}; this device has ${local?.app_ver ?? UNKNOWN}). Install the same version on both.`;
   }
   if (p.role === "host") return "Hosting its own model, so it can't hold layers for this one.";
-  if (p.role === "idle") return "Not a worker yet. Tap Start worker on that device.";
+  if (p.role === "idle") return "Not a worker yet. Choose Worker on that device.";
   return null;
 }
 

@@ -29,6 +29,8 @@ namespace {
 enum worker_state : int { IDLE = 0, STARTING = 1, RUNNING = 2, EXITED = 3 };
 
 std::atomic<int> g_state{IDLE};
+std::atomic<bool> g_stopping{false};
+std::atomic<int>  g_port{0};
 std::mutex       g_mu;            // guards the strings below
 std::string      g_endpoint;
 std::string      g_device;
@@ -90,6 +92,30 @@ bool can_connect(const char * host, int port) {
     return ok;
 }
 
+// This process's TCP sockets on `port`: the server's listening socket, or the
+// connections it accepted (their local port is the same). llama.cpp keeps these to
+// itself, so the only way to reach them is to look at our own open descriptors.
+std::vector<int> sockets_on(int port, bool listening) {
+    std::vector<int> fds;
+    const int max_fd = (int) std::min<long>(sysconf(_SC_OPEN_MAX), 65536);
+    for (int fd = 0; fd < max_fd; fd++) {
+        int type = 0;
+        socklen_t len = sizeof(type);
+        if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) != 0 || type != SOCK_STREAM) continue;
+        sockaddr_storage local{};
+        len = sizeof(local);
+        if (getsockname(fd, (sockaddr *) &local, &len) != 0) continue;
+        int p = local.ss_family == AF_INET ? ntohs(((sockaddr_in *) &local)->sin_port)
+              : local.ss_family == AF_INET6 ? ntohs(((sockaddr_in6 *) &local)->sin6_port) : -1;
+        if (p != port) continue;
+        sockaddr_storage peer{};
+        len = sizeof(peer);
+        const bool connected = getpeername(fd, (sockaddr *) &peer, &len) == 0;
+        if (connected != listening) fds.push_back(fd);
+    }
+    return fds;
+}
+
 } // namespace
 
 extern "C" int dl_worker_start(const char * bind_host, int port, const char * cache_dir, int n_threads) {
@@ -116,12 +142,14 @@ extern "C" int dl_worker_start(const char * bind_host, int port, const char * ca
         g_dev      = devs[0];
         g_device   = ggml_backend_dev_description(devs[0]);
     }
+    g_port = port;
 
     dl_model_cache_install();   // dl_model_cache.cpp
     std::thread([endpoint, cache, threads, devs]() mutable {
         ggml_backend_rpc_start_server(endpoint.c_str(), cache.empty() ? nullptr : cache.c_str(),
                                       threads, devs.size(), devs.data());
-        g_state = EXITED;   // only reached if the server failed or stopped
+        // Only reached if the server failed, or dl_worker_stop closed its socket.
+        g_state = g_stopping.exchange(false) ? IDLE : EXITED;
     }).detach();
 
     // Wait until it is accepting connections (or has given up).
@@ -137,6 +165,34 @@ extern "C" int dl_worker_start(const char * bind_host, int port, const char * ca
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     return DL_ERR_START;
+}
+
+extern "C" int dl_worker_clients(void) {
+    return g_state == RUNNING ? (int) sockets_on(g_port, false).size() : 0;
+}
+
+extern "C" int dl_worker_stop(void) {
+    if (g_state != RUNNING) return g_state == IDLE ? DL_OK : DL_ERR_START;
+    g_stopping = true;
+    // Wake the server's accept(): shutdown() does on Linux and Android; on Apple systems
+    // it fails on a listening socket, but replacing the descriptor does. The placeholder
+    // keeps the number taken until llama.cpp closes it, so no other file gets closed.
+    for (int fd : sockets_on(g_port, true)) {
+        shutdown(fd, SHUT_RDWR);
+        int placeholder = socket(AF_INET, SOCK_STREAM, 0);
+        if (placeholder >= 0) {
+            dup2(placeholder, fd);
+            close(placeholder);
+        }
+    }
+    // Then end any host's connection, so the server stops serving and its buffers are freed.
+    for (int fd : sockets_on(g_port, false)) shutdown(fd, SHUT_RDWR);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (g_state != IDLE && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return g_state == IDLE ? DL_OK : DL_ERR_START;
 }
 
 extern "C" int dl_worker_status(dl_worker_status_t * out) {

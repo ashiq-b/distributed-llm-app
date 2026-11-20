@@ -42,7 +42,7 @@ export interface GenSummary {
 
 export const deviceInfo = () => invoke<DeviceInfo>("device_info");
 
-/** What this device is doing. A worker stays one until the app is closed. */
+/** What this device is doing. */
 export type RoleState =
   | { role: "idle" }
   | { role: "worker"; status: WorkerStatus }
@@ -62,6 +62,8 @@ export const becomeWorker = (port?: number) => invoke<RoleState>("become_worker"
 export const becomeHost = (modelId: string, peerIds: string[]) =>
   invoke<DeviceShare[]>("become_host", { modelId, peerIds });
 export const leaveRole = () => invoke<RoleState>("leave_role");
+/** Hosts using this device as a worker right now; leaving the worker role ends their session. */
+export const workerHosts = () => invoke<number>("worker_hosts");
 export const onRoleChanged = (cb: (s: RoleState) => void): Promise<UnlistenFn> =>
   listen<RoleState>("role-changed", (e) => cb(e.payload));
 

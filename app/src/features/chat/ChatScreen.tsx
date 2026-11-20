@@ -212,6 +212,7 @@ function Conversation({ modelId, shares }: { modelId: string; shares: DeviceShar
 
 export default function ChatScreen() {
   const role = useRole((s) => s.role);
+  const go = useNav((s) => s.go);
   const desktop = useIsDesktop();
 
   if (role?.role === "host") return <Conversation modelId={role.model_id} shares={role.shares} />;
@@ -227,7 +228,10 @@ export default function ChatScreen() {
           </div>
         ) : <SplitPanel />
       ) : role?.role === "worker" ? (
-        <p className="text-pretty text-muted-foreground">This device is holding layers for a host until the app is closed. Chat from the host.</p>
+        <div className="space-y-4">
+          <p className="text-pretty text-muted-foreground">This device is a worker, holding layers for other devices. To load a model here, switch it to Idle first.</p>
+          <Button variant="outline" onClick={() => go("devices")}>Go to Devices</Button>
+        </div>
       ) : (
         <LoadPanel />
       )}

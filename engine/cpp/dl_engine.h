@@ -34,9 +34,16 @@ typedef struct {
 
 // Start llama.cpp's RPC server on a background thread and return once it is
 // listening. cache_dir may be NULL (no tensor cache); n_threads <= 0 = default.
-// There is no stop: llama.cpp v1.0.0 exposes none, so the worker lives until
-// the process exits.
+// Stop it with dl_worker_stop; it can then be started again.
 int dl_worker_start(const char * bind_host, int port, const char * cache_dir, int n_threads);
+
+// Stop the worker: close its listening socket and any host's connection, and wait (up to
+// 10 s) for the server to return. llama.cpp v1.0.0 has no stop API, so this works on the
+// sockets themselves. Returns DL_OK (also if it wasn't running) or DL_ERR_START.
+int dl_worker_stop(void);
+
+// How many hosts are connected to the worker right now (0 if it isn't running).
+int dl_worker_clients(void);
 
 // Fill *out with the worker's current status. Returns DL_OK, or DL_ERR_ARGS.
 int dl_worker_status(dl_worker_status_t * out);

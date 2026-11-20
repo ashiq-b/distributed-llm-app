@@ -102,7 +102,7 @@ fn change_role<T>(app: &AppHandle, f: impl FnOnce(&mut Roles) -> T) -> T {
 }
 
 /// Become a worker on `port` (default 50052); the next announcement says so.
-/// A worker stays on until the app is closed (llama.cpp can't stop its RPC server).
+/// `leave_role` stops it again.
 #[tauri::command]
 pub async fn become_worker(app: AppHandle, port: Option<u16>) -> Result<RoleState, String> {
     let port = port.unwrap_or(registry::DEFAULT_RPC_PORT);
@@ -184,10 +184,18 @@ pub async fn become_host(app: AppHandle, model_id: String, peer_ids: Vec<String>
     .await
 }
 
-/// Unload the model and go back to Idle. A worker can't leave (see `become_worker`).
+/// Back to Idle: unload the model, or stop the worker (ending any host's session on it).
 #[tauri::command]
 pub async fn leave_role(app: AppHandle) -> Result<RoleState, String> {
     blocking(move || {
+        let state = app.state::<EngineState>();
+        if matches!(state.roles.lock().unwrap().state(), RoleState::Worker { .. }) {
+            let mut worker = state.worker.lock().unwrap();
+            if let Some(w) = worker.as_ref() {
+                w.stop().map_err(|e| e.to_string())?;
+            }
+            *worker = None;
+        }
         change_role(&app, |r| r.leave())?;
         if let Some(host) = app.state::<EngineState>().host.lock().unwrap().take() {
             host.cancel();
@@ -196,6 +204,13 @@ pub async fn leave_role(app: AppHandle) -> Result<RoleState, String> {
         Ok(app.state::<EngineState>().roles.lock().unwrap().state().clone())
     })
     .await
+}
+
+/// Hosts using this device as a worker right now (0 if it isn't one). Leaving the worker
+/// role ends their session, so the UI asks first when this is above 0.
+#[tauri::command]
+pub fn worker_hosts(app: AppHandle) -> usize {
+    app.state::<EngineState>().worker.lock().unwrap().as_ref().map_or(0, |w| w.clients())
 }
 
 /// Send a message in the current conversation. The answer streams as `token` events,

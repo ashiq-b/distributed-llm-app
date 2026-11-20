@@ -28,10 +28,8 @@ pub struct WorkerStatus {
     pub free_mb: Option<u64>,
 }
 
-/// A running llama.cpp RPC server in this process.
-///
-/// There is no `stop`: llama.cpp v1.0.0 has no API to stop its RPC server, so a
-/// worker runs until the app exits. Only one worker can exist per process.
+/// A running llama.cpp RPC server in this process. Only one worker can exist per process;
+/// `stop` ends it, and a new one can then be started.
 #[derive(Debug)]
 pub struct Worker {
     _private: (),
@@ -78,6 +76,20 @@ impl Worker {
     /// Weight bytes this worker has taken from its own model files instead of the network.
     pub fn bytes_from_models() -> u64 {
         unsafe { ffi::dl_worker_bytes_from_models() }
+    }
+
+    /// Stop serving: closes the listening socket and any host's connection (that host's
+    /// model stops working), then waits for the server to return.
+    pub fn stop(&self) -> Result<(), EngineError> {
+        match unsafe { ffi::dl_worker_stop() } {
+            ffi::DL_OK => Ok(()),
+            other => Err(EngineError::Start(format!("worker did not stop (engine error {other})"))),
+        }
+    }
+
+    /// Hosts connected right now.
+    pub fn clients(&self) -> usize {
+        usize::try_from(unsafe { ffi::dl_worker_clients() }).unwrap_or(0)
     }
 
     pub fn status(&self) -> WorkerStatus {

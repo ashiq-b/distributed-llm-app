@@ -26,6 +26,7 @@ pub fn run() {
             commands::become_worker,
             commands::become_host,
             commands::leave_role,
+            commands::worker_hosts,
             commands::chat_send,
             commands::chat_stop,
             commands::chat_history,
