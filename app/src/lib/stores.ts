@@ -2,7 +2,7 @@
 // empty: nothing is shown until the device itself reports it (no seeded devices or models).
 import { create } from "zustand";
 import {
-  deviceInfo, roleState, discoveryStart, catalog, chatHistory,
+  deviceInfo, roleState, discoveryStart, catalog, chatHistory, becomeHost,
   onRoleChanged, onPeersChanged,
   onPeersHeard, onToken, onDownloadProgress,
   type DeviceInfo, type RoleState, type PeerView, type ModelView, type DownloadProgress,
@@ -52,13 +52,44 @@ export const useModels = create<{
 
 /** The conversation with the loaded model. `streaming` is the reply as it arrives;
  *  `live` counts its tokens as they arrive (for the live speed). */
+/** What went wrong with the model or the conversation, sorted by what the user can do. */
+export interface ChatProblem {
+  kind: "worker_lost" | "out_of_memory" | "not_loaded" | "other";
+  message: string;
+}
+
+/** Sort an error from the app by its message (the Rust side's own words). */
+export function classify(e: unknown): ChatProblem {
+  const message = errorText(e);
+  const kind: ChatProblem["kind"] =
+    /lost connection to worker|device no longer available|cannot reach worker/i.test(message) ? "worker_lost"
+    : /not enough memory/i.test(message) ? "out_of_memory"
+    : /no model loaded/i.test(message) ? "not_loaded"
+    : "other";
+  return { kind, message };
+}
+
 export const useChat = create<{
   history: ChatMessage[];
   streaming: string;
   summary: GenSummary | null;
   sending: boolean;
   live: Live | null;
-}>(() => ({ history: [], streaming: "", summary: null, sending: false, live: null }));
+  problem: ChatProblem | null;
+  /** The last load asked for, so Reconnect can ask again. */
+  lastLoad: { modelId: string; workers: string[] } | null;
+}>(() => ({ history: [], streaming: "", summary: null, sending: false, live: null, problem: null, lastLoad: null }));
+
+/** Load a model with these workers. A failure is kept as the chat's problem (shown as a
+ * banner with what to do), not thrown. */
+export async function loadModel(modelId: string, workers: string[]) {
+  useChat.setState({ lastLoad: { modelId, workers }, problem: null });
+  try {
+    await becomeHost(modelId, workers);
+  } catch (e) {
+    useChat.setState({ problem: classify(e) });
+  }
+}
 
 /** Which screen is showing. */
 export type Screen = "devices" | "models" | "chat";
@@ -119,19 +150,30 @@ export const useNotice = create<{
   clear: () => set({ error: null }),
 }));
 
+/** Whatever started the hosting, Reconnect should be able to load the same model again. */
+function rememberHosted(modelId: string) {
+  if (useChat.getState().lastLoad?.modelId !== modelId) {
+    useChat.setState({ lastLoad: { modelId, workers: chosenPeers(usePeers.getState()) } });
+  }
+}
+
 /** Ask the app for its state and follow its events. Returns a function that stops listening. */
 export function connectStores(): () => void {
   const fail = useNotice.getState().fail;
   const refreshHistory = () => chatHistory().then((history) => useChat.setState({ history })).catch(fail);
 
   deviceInfo().then((info) => useDevice.setState({ info })).catch(fail);
-  roleState().then((role) => useRole.setState({ role })).catch(fail);
+  roleState().then((role) => {
+    if (role.role === "host") rememberHosted(role.model_id);
+    useRole.setState({ role });
+  }).catch(fail);
   discoveryStart().then((peers) => usePeers.setState({ peers })).catch(fail);
   useModels.getState().refresh();
 
   const listeners = [
     onRoleChanged((role) => {
       if (role.role === "loading") emitPulse({ kind: "load" });
+      if (role.role === "host") rememberHosted(role.model_id);
       useRole.setState({ role });
       refreshHistory();
     }),

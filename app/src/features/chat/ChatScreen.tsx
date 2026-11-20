@@ -1,8 +1,9 @@
 // Load a model (on this device, with the workers picked in Devices) and talk to it.
-// (Task 4.4 adds the remaining chat states.)
+// If a device drops out, the conversation stays on screen with a banner that says what
+// happened and what to do; the composer waits until the model is back.
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronUp, Power, SquarePen, Square } from "lucide-react";
+import { ChevronUp, Power, SquarePen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -11,20 +12,21 @@ import { peerNodes } from "@/features/mesh/nodes";
 import { LayerBar } from "@/features/split/LayerBands";
 import LiveStats from "@/features/split/LiveStats";
 import SplitPanel from "@/features/split/SplitPanel";
-import { becomeHost, chatHistory, chatReset, chatSend, chatStop, leaveRole, type DeviceShare } from "@/lib/tauri";
-import { chosenPeers, useChat, useLayout, useModels, useNav, useNotice, usePeers, useRole } from "@/lib/stores";
+import { chatHistory, chatReset, chatSend, chatStop, leaveRole, type DeviceShare } from "@/lib/tauri";
+import { chosenPeers, classify, loadModel, useChat, useLayout, useModels, useNav, useNotice, usePeers, useRole } from "@/lib/stores";
 import { toneOf } from "@/features/split/LayerBands";
 import { withPeerNames } from "@/features/split/names";
 import { fileSize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useIsDesktop } from "@/app/useMediaQuery";
-import { splitThinking } from "./thinking";
+import ChatBanner from "./ChatBanner";
+import Composer from "./Composer";
+import MessageList from "./MessageList";
 
 function LoadPanel() {
   const models = useModels((s) => s.models).filter((m) => m.status.state === "ready");
   const peers = usePeers((s) => s.peers);
   const workers = usePeers(useShallow(chosenPeers));
-  const fail = useNotice((s) => s.fail);
   const go = useNav((s) => s.go);
   const [modelId, setModelId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -64,7 +66,7 @@ function LoadPanel() {
       <Button variant="signal" className="w-full desk:w-auto" disabled={busy || !id}
         onClick={async () => {
           setBusy(true);
-          try { await becomeHost(id, workers); } catch (e) { fail(e); } finally { setBusy(false); }
+          try { await loadModel(id, workers); } finally { setBusy(false); }
         }}>
         Load {models.find((m) => m.id === id)?.name}
       </Button>
@@ -126,52 +128,37 @@ function SplitSheet({ shares: raw }: { shares: DeviceShare[] }) {
   );
 }
 
-function Reply({ text, live }: { text: string; live?: boolean }) {
-  const { thinking, answer, stillThinking } = splitThinking(text);
-  return (
-    <div className="max-w-[92%] min-w-0">
-      {thinking != null && (
-        <details className="mb-2 rounded-xl border px-3.5 py-2 text-sm text-muted-foreground" open={stillThinking}>
-          <summary className="cursor-pointer select-none font-medium">{stillThinking ? "Thinking…" : "Thought it through"}</summary>
-          <p className="mt-2 whitespace-pre-wrap break-words">{thinking}</p>
-        </details>
-      )}
-      {(answer || !thinking) && (
-        <p className={cn("whitespace-pre-wrap break-words font-serif text-[1.1875rem] leading-[1.75rem]", live && !answer && "text-muted-foreground")}>
-          {answer || (live ? "…" : "")}
-        </p>
-      )}
-    </div>
-  );
+/** "This device and Mac": the devices holding the model, by the names they announce. */
+function devicesLine(shares: DeviceShare[]) {
+  const names = shares.map((s) => (s.is_remote ? s.name : "this device"));
+  const list = names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return list ? `On ${list}` : "";
 }
 
-function Conversation({ modelId, shares }: { modelId: string; shares: DeviceShare[] }) {
+/** The conversation with a loaded model, or, after a device dropped out, the same
+ * conversation waiting for the model to come back (`shares` is null then). */
+function Conversation({ modelId, shares: raw }: { modelId: string; shares: DeviceShare[] | null }) {
   const desktop = useIsDesktop();
-  const { history, streaming, summary, sending } = useChat();
+  const { history, streaming, sending } = useChat();
+  const peers = usePeers((s) => s.peers);
   const fail = useNotice((s) => s.fail);
-  const [text, setText] = useState("");
-  const [think, setThink] = useState(false);
   const name = useModels((s) => s.models.find((m) => m.id === modelId)?.name ?? modelId);
   const end = useRef<HTMLDivElement>(null);
-  const box = useRef<HTMLTextAreaElement>(null);
-  // The field grows with what's typed, up to its max height, then scrolls.
-  const grow = (el: HTMLTextAreaElement) => { el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; };
+  const online = raw != null;
+  const shares = raw ? withPeerNames(raw, peers) : null;
+  const summary = useChat((s) => s.summary);
 
-  useEffect(() => { chatHistory().then((history) => useChat.setState({ history })).catch(fail); }, [fail]);
+  useEffect(() => { chatHistory().then((history) => useChat.setState({ history })).catch(fail); }, [fail, online]);
   useEffect(() => { end.current?.scrollIntoView?.({ block: "end" }); }, [history.length, streaming]);
 
-  const send = async () => {
-    const t = text.trim();
-    if (!t || sending) return;
-    setText("");
-    if (box.current) box.current.style.height = "";
-    useChat.setState((s) => ({ history: [...s.history, { role: "user", content: t }], streaming: "", summary: null, sending: true, live: null }));
+  const send = async (text: string, think: boolean) => {
+    useChat.setState((s) => ({ history: [...s.history, { role: "user", content: text }], streaming: "", summary: null, sending: true, live: null, problem: null }));
     try {
-      const s = await chatSend(t, think);
+      const s = await chatSend(text, think);
       // Ran out of length mid-thought: keep the reasoning on screen, it's all there is.
       useChat.setState((st) => ({ summary: s, streaming: s.stopped === "max_tokens_while_thinking" ? st.streaming : "" }));
     } catch (e) {
-      fail(e);
+      useChat.setState({ problem: classify(e), streaming: "" });
     } finally {
       useChat.setState({ sending: false, history: await chatHistory().catch(() => useChat.getState().history) });
     }
@@ -180,35 +167,35 @@ function Conversation({ modelId, shares }: { modelId: string; shares: DeviceShar
   return (
     <div className="flex min-h-[calc(100dvh-10rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] flex-col desk:min-h-[calc(100dvh-4.5rem)]">
       <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
-        <h1 className="min-w-0 text-balance break-words font-serif text-3xl font-medium tracking-tight desk:text-4xl">{name}</h1>
+        <div className="min-w-0">
+          <h1 className="text-balance break-words font-serif text-3xl font-medium tracking-tight desk:text-4xl">{name}</h1>
+          <p className="num mt-0.5 flex items-center gap-2 text-sm text-muted-foreground">
+            <span aria-hidden className={cn("size-2 shrink-0 rounded-full", online ? "bg-signal" : "bg-destructive")} />
+            <span className="min-w-0 truncate">{shares ? devicesLine(shares) : "Not loaded"}</span>
+          </p>
+        </div>
         <div className="flex shrink-0 gap-2">
-          <Button variant="outline" size="sm" disabled={sending}
+          <Button variant="outline" size="sm" disabled={sending || !online}
             onClick={() => chatReset().then(() => useChat.setState({ history: [], streaming: "", summary: null, live: null })).catch(fail)}>
             <SquarePen aria-hidden />New chat
           </Button>
-          <Button variant="outline" size="sm" disabled={sending} onClick={() => leaveRole().then((role) => useRole.setState({ role })).catch(fail)}>
-            <Power aria-hidden />Unload
-          </Button>
+          {online && (
+            <Button variant="outline" size="sm" disabled={sending} onClick={() => leaveRole().then((role) => useRole.setState({ role })).catch(fail)}>
+              <Power aria-hidden />Unload
+            </Button>
+          )}
         </div>
       </div>
 
-      {!desktop && <div className="mt-3"><SplitSheet shares={shares} /></div>}
+      <div className="mt-3 space-y-3 empty:hidden">
+        <ChatBanner />
+        {!desktop && shares && <SplitSheet shares={shares} />}
+      </div>
 
-      <ol className="mt-6 flex flex-1 flex-col gap-5">
-        {history.length === 0 && !sending && (
-          <li className="text-pretty text-muted-foreground">Ask anything. Every token passes through each device in the split.</li>
-        )}
-        {history.map((m, i) =>
-          m.role === "user" ? (
-            <li key={i} className="max-w-[82%] self-end whitespace-pre-wrap break-words rounded-[18px] rounded-br-[5px] bg-primary px-4 py-2.5 text-primary-foreground">
-              {m.content}
-            </li>
-          ) : (
-            <li key={i}><Reply text={m.content} /></li>
-          ),
-        )}
-        {(streaming || sending) && <li aria-live="polite"><Reply text={streaming} live /></li>}
-      </ol>
+      <div className="mt-6 flex flex-1 flex-col">
+        <MessageList history={history} streaming={streaming} sending={sending}
+          empty="Ask anything. Every token passes through each device in the split." />
+      </div>
 
       {summary?.stopped === "max_tokens_while_thinking" && (
         <p className="mt-3 text-sm text-destructive">Ran out of length while thinking, so there is no answer. Ask again, or turn off Think first.</p>
@@ -216,27 +203,9 @@ function Conversation({ modelId, shares }: { modelId: string; shares: DeviceShar
       <LiveStats className="mt-3" />
       <div ref={end} />
 
-      <form className="sticky bottom-0 -mx-1 mt-4 bg-background pb-3 pt-2" onSubmit={(e) => { e.preventDefault(); send(); }}>
-        <div className="cursor-text rounded-[22px] border border-input bg-raised py-1.5 pl-4 pr-1.5 transition-[border-color,box-shadow] focus-within:border-signal/60 focus-within:shadow-[0_0_0_4px_hsl(var(--signal)/0.14)]"
-          onClick={(e) => { if (e.target === e.currentTarget) box.current?.focus(); }}>
-          <label htmlFor="msg" className="sr-only">Message</label>
-          <textarea id="msg" ref={box} rows={1} placeholder="Ask something" enterKeyHint={desktop ? "send" : "enter"}
-            className="block max-h-40 min-h-10 w-full resize-none bg-transparent py-2 pr-2.5 text-base leading-6 outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
-            value={text} onChange={(e) => { setText(e.target.value); grow(e.target); }}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && desktop) { e.preventDefault(); send(); } }} />
-          <div className="flex items-center justify-between">
-            <label className="flex min-h-11 items-center gap-2 text-sm text-muted-foreground">
-              <input type="checkbox" className="size-[18px] accent-[hsl(var(--signal))]" checked={think} onChange={(e) => setThink(e.target.checked)} />
-              Think first
-            </label>
-            {sending ? (
-              <Button type="button" variant="outline" size="icon" aria-label="Stop" onClick={() => chatStop().catch(fail)}><Square className="fill-current" /></Button>
-            ) : (
-              <Button type="submit" variant="signal" size="icon" aria-label="Send" disabled={!text.trim()}><ArrowUp /></Button>
-            )}
-          </div>
-        </div>
-      </form>
+      <Composer desktop={desktop} sending={sending} disabled={!online}
+        placeholder={online ? "Ask something" : "Reconnect to keep chatting"}
+        onSend={send} onStop={() => chatStop().catch(fail)} />
     </div>
   );
 }
@@ -246,10 +215,18 @@ export default function ChatScreen() {
   const go = useNav((s) => s.go);
   const desktop = useIsDesktop();
 
+  const problem = useChat((s) => s.problem);
+  const lastLoad = useChat((s) => s.lastLoad);
+
   if (role?.role === "host") return <Conversation modelId={role.model_id} shares={role.shares} />;
+  // A device dropped out mid-conversation: keep the conversation, wait for Reconnect.
+  if (role?.role === "idle" && problem?.kind === "worker_lost" && lastLoad) {
+    return <Conversation modelId={lastLoad.modelId} shares={null} />;
+  }
   return (
     <div className="space-y-5">
       <h1 className="font-serif text-4xl font-medium tracking-tight">Chat</h1>
+      <ChatBanner />
       {role?.role === "loading" ? (
         desktop ? (
           <div className="space-y-3">

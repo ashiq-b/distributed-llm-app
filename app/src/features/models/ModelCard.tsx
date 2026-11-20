@@ -3,8 +3,8 @@
 // and Load. Every number is real: catalog sizes, download progress, announced free memory.
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { becomeHost, modelCancelDownload, modelDelete, modelDownload, type ModelView, type RoleState } from "@/lib/tauri";
-import { useModels, useNav, useNotice } from "@/lib/stores";
+import { modelCancelDownload, modelDelete, modelDownload, type ModelView, type RoleState } from "@/lib/tauri";
+import { loadModel, useModels, useNav, useNotice } from "@/lib/stores";
 import { UNKNOWN, fileSize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { fit, type Share } from "./fit";
@@ -88,7 +88,7 @@ export default function ModelCard({
     setTimeout(refresh, 300);
   };
   const load = () => {
-    becomeHost(m.id, workers).catch(fail);
+    loadModel(m.id, workers);   // a failure shows as a banner in Chat
     go("chat");
   };
 
