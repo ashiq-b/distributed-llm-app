@@ -2,6 +2,7 @@
 // reply being written, which grows token by token from the app's `token` events.
 import type { ChatMessage } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import Markdown from "./Markdown";
 import { splitThinking } from "./thinking";
 
 function Reply({ text, live }: { text: string; live?: boolean }) {
@@ -15,10 +16,11 @@ function Reply({ text, live }: { text: string; live?: boolean }) {
         </details>
       )}
       {(answer || !thinking) && (
-        <p className={cn("whitespace-pre-wrap break-words font-serif text-[1.1875rem] leading-[1.75rem]", live && !answer && "text-muted-foreground")}>
-          {answer || (live ? "…" : "")}
-          {live && answer && <span aria-hidden className="ml-0.5 inline-block h-[1.05em] w-[2px] translate-y-[0.15em] bg-signal motion-safe:animate-pulse" />}
-        </p>
+        answer ? (
+          <Markdown text={answer} className={cn("font-serif text-[1.1875rem] leading-[1.75rem]", live && "[&>*:last-child]:after:ml-0.5 [&>*:last-child]:after:inline-block [&>*:last-child]:after:h-[1.05em] [&>*:last-child]:after:w-[2px] [&>*:last-child]:after:translate-y-[0.15em] [&>*:last-child]:after:bg-signal [&>*:last-child]:after:content-[''] motion-safe:[&>*:last-child]:after:animate-pulse")} />
+        ) : (
+          <p className="font-serif text-[1.1875rem] leading-[1.75rem] text-muted-foreground">{live ? "…" : ""}</p>
+        )
       )}
     </div>
   );
