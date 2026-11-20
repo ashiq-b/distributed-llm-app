@@ -1,0 +1,93 @@
+/* Design tokens. One neutral family (cool graphite) and one accent (signal amber), in
+   light and dark. Values are HSL channels so Tailwind can add alpha (see tailwind.config.js).
+   Dark follows the system unless data-theme on <html> says otherwise. */
+@import "@fontsource-variable/schibsted-grotesk";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 20% 97%;        /* #F5F6F8 paper */
+    --surface: 0 0% 100%;             /* raised panels */
+    --foreground: 216 15% 13%;        /* #1C2026 ink */
+    --card: 0 0% 100%;
+    --card-foreground: 216 15% 13%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 216 15% 13%;
+    --primary: 216 15% 16%;           /* buttons: ink on paper */
+    --primary-foreground: 220 20% 97%;
+    --secondary: 220 14% 92%;
+    --secondary-foreground: 216 15% 16%;
+    --muted: 220 14% 93%;
+    --muted-foreground: 218 9% 40%;   /* AA on paper */
+    --accent: 220 14% 92%;            /* shadcn hover fill; the brand accent is --signal */
+    --accent-foreground: 216 15% 13%;
+    --destructive: 2 64% 46%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 222 12% 87%;            /* #DADDE3 line */
+    --input: 222 12% 84%;
+    --ring: 38 85% 39%;
+    --signal: 38 85% 39%;             /* #B7790F amber, AA as text on paper */
+    --signal-soft: 40 80% 92%;
+    --signal-ink: 36 90% 22%;
+    --ok: 150 55% 32%;
+    --warn: 28 85% 42%;
+    --radius: 0.75rem;
+    color-scheme: light;
+  }
+
+  :root[data-theme="dark"] {
+    --background: 216 13% 10%;        /* #16191E */
+    --surface: 216 12% 13%;
+    --foreground: 220 13% 91%;        /* #E6E8EC */
+    --card: 216 12% 13%;
+    --card-foreground: 220 13% 91%;
+    --popover: 216 12% 14%;
+    --popover-foreground: 220 13% 91%;
+    --primary: 220 13% 91%;
+    --primary-foreground: 216 13% 10%;
+    --secondary: 216 10% 19%;
+    --secondary-foreground: 220 13% 91%;
+    --muted: 216 10% 17%;
+    --muted-foreground: 218 9% 64%;
+    --accent: 216 10% 19%;
+    --accent-foreground: 220 13% 91%;
+    --destructive: 2 70% 58%;
+    --destructive-foreground: 216 13% 10%;
+    --border: 216 9% 22%;
+    --input: 216 9% 26%;
+    --ring: 39 76% 54%;
+    --signal: 39 76% 54%;             /* #E3A42F */
+    --signal-soft: 38 40% 18%;
+    --signal-ink: 40 90% 75%;
+    --ok: 150 45% 52%;
+    --warn: 30 85% 60%;
+    color-scheme: dark;
+  }
+
+  * {
+    @apply border-border;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  html, body, #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground font-sans text-base antialiased;
+    overscroll-behavior: none;
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
