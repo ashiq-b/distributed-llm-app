@@ -7,6 +7,8 @@ import {
   type DeviceInfo, type RoleState, type PeerView, type ModelView, type DownloadProgress,
   type ChatMessage, type GenSummary,
 } from "./tauri";
+import { emitPulse } from "./pulse";
+import { addToken, type Live } from "./rate";
 
 export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -47,13 +49,31 @@ export const useModels = create<{
   },
 }));
 
-/** The conversation with the loaded model. `streaming` is the reply as it arrives. */
+/** The conversation with the loaded model. `streaming` is the reply as it arrives;
+ *  `live` counts its tokens as they arrive (for the live speed). */
 export const useChat = create<{
   history: ChatMessage[];
   streaming: string;
   summary: GenSummary | null;
   sending: boolean;
-}>(() => ({ history: [], streaming: "", summary: null, sending: false }));
+  live: Live | null;
+}>(() => ({ history: [], streaming: "", summary: null, sending: false, live: null }));
+
+/** Which screen is showing. */
+export type Screen = "devices" | "models" | "chat";
+const SCREENS: Screen[] = ["devices", "models", "chat"];
+const fromHash = (): Screen => {
+  const h = typeof location === "undefined" ? "" : location.hash.slice(1);
+  return SCREENS.includes(h as Screen) ? (h as Screen) : "devices";
+};
+/** The screen is kept in the URL hash (#chat), so a reload comes back to it. */
+export const useNav = create<{ screen: Screen; go: (s: Screen) => void }>((set) => ({
+  screen: fromHash(),
+  go: (screen) => {
+    set({ screen });
+    try { history.replaceState(null, "", `#${screen}`); } catch { /* not a browser */ }
+  },
+}));
 
 /** The last thing that went wrong, shown until dismissed or replaced. */
 export const useNotice = create<{
@@ -78,11 +98,18 @@ export function connectStores(): () => void {
 
   const listeners = [
     onRoleChanged((role) => {
+      if (role.role === "loading") emitPulse({ kind: "load" });
       useRole.setState({ role });
       refreshHistory();
     }),
-    onPeersChanged((peers) => usePeers.setState({ peers })),
-    onToken((piece) => useChat.setState((s) => ({ streaming: s.streaming + piece }))),
+    onPeersChanged((peers) => {
+      usePeers.setState({ peers });
+      peers.forEach((p) => emitPulse({ kind: "heartbeat", peerId: p.id }));
+    }),
+    onToken((piece) => {
+      useChat.setState((s) => ({ streaming: s.streaming + piece, live: addToken(s.live, performance.now()) }));
+      emitPulse({ kind: "token" });
+    }),
     onDownloadProgress((p) => useModels.setState((s) => ({ progress: { ...s.progress, [p.id]: p } }))),
   ];
   return () => listeners.forEach((l) => l.then((stop) => stop()));

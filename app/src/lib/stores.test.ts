@@ -10,5 +10,6 @@ test("stores start empty (no seeded devices/models)", () => {
   expect(useChat.getState().history).toEqual([]);
   expect(useChat.getState().streaming).toBe("");
   expect(useChat.getState().summary).toBeNull();
+  expect(useChat.getState().live).toBeNull();
   expect(useNotice.getState().error).toBeNull();
 });

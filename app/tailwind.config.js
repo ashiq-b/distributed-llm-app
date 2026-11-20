@@ -12,8 +12,8 @@ export default {
     screens: { sm: "600px", desk: "900px", wide: "1240px" },
     extend: {
       colors: {
-        border: v("border"),
-        input: v("input"),
+        border: "hsl(var(--border))",
+        input: "hsl(var(--input))",
         ring: v("ring"),
         background: v("background"),
         foreground: v("foreground"),
@@ -28,6 +28,8 @@ export default {
         ok: v("ok"),
         warn: v("warn"),
         surface: v("surface"),
+        raised: v("raised"),
+        strand: v("strand"),
       },
       borderRadius: {
         lg: "var(--radius)",
@@ -35,17 +37,19 @@ export default {
         sm: "calc(var(--radius) - 6px)",
       },
       fontFamily: {
-        sans: ['"Schibsted Grotesk Variable"', "system-ui", "-apple-system", "sans-serif"],
+        sans: ['"Inter Tight Variable"', "system-ui", "-apple-system", "sans-serif"],
+        serif: ['"Newsreader Variable"', "Georgia", "serif"],
       },
-      // A 1.2 scale from 15px body; line heights tighten as size grows.
+      // A 1.2 scale from 16px body (no iOS zoom on inputs); line heights tighten as size grows.
       fontSize: {
         xs: ["0.8125rem", { lineHeight: "1.1rem" }],
-        sm: ["0.875rem", { lineHeight: "1.25rem" }],
-        base: ["0.9375rem", { lineHeight: "1.45rem" }],
+        sm: ["0.875rem", { lineHeight: "1.3rem" }],
+        base: ["1rem", { lineHeight: "1.5rem" }],
         lg: ["1.125rem", { lineHeight: "1.55rem" }],
         xl: ["1.35rem", { lineHeight: "1.75rem" }],
-        "2xl": ["1.62rem", { lineHeight: "2rem" }],
-        "3xl": ["1.95rem", { lineHeight: "2.3rem" }],
+        "2xl": ["1.5rem", { lineHeight: "1.9rem" }],
+        "3xl": ["2.25rem", { lineHeight: "2.5rem" }],
+        "4xl": ["2.75rem", { lineHeight: "3rem" }],
       },
       spacing: {
         "safe-t": "env(safe-area-inset-top)",
@@ -54,6 +58,7 @@ export default {
         "safe-r": "env(safe-area-inset-right)",
       },
       keyframes: {
+        sweep: { from: { transform: "translateX(-2.5rem)" }, to: { transform: "translateX(calc(100vw))" } },
         "accordion-down": { from: { height: "0" }, to: { height: "var(--radix-accordion-content-height)" } },
         "accordion-up": { from: { height: "var(--radix-accordion-content-height)" }, to: { height: "0" } },
       },

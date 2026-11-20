@@ -1,10 +1,11 @@
 import type { ComponentType } from "react";
-import { MessagesSquare, Boxes, Radar, type LucideIcon } from "lucide-react";
+import { MessageSquare, Radio, Rows3, type LucideIcon } from "lucide-react";
 import DevicesScreen from "@/features/devices/DevicesScreen";
 import ModelsScreen from "@/features/models/ModelsScreen";
 import ChatScreen from "@/features/chat/ChatScreen";
+import type { Screen } from "@/lib/stores";
 
-export type RouteId = "devices" | "models" | "chat";
+export type RouteId = Screen;
 
 export interface Route {
   id: RouteId;
@@ -14,7 +15,7 @@ export interface Route {
 }
 
 export const routes: Route[] = [
-  { id: "devices", label: "Devices", icon: Radar, Screen: DevicesScreen },
-  { id: "models", label: "Models", icon: Boxes, Screen: ModelsScreen },
-  { id: "chat", label: "Chat", icon: MessagesSquare, Screen: ChatScreen },
+  { id: "devices", label: "Devices", icon: Radio, Screen: DevicesScreen },
+  { id: "models", label: "Models", icon: Rows3, Screen: ModelsScreen },
+  { id: "chat", label: "Chat", icon: MessageSquare, Screen: ChatScreen },
 ];
