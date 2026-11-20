@@ -36,3 +36,8 @@ test("every strand ends inside the view", () => {
     expect(s.p3.y).toBeLessThanOrEqual(240);
   }
 });
+
+test("no devices: no anchors and no strands (the app starts this way)", () => {
+  expect(anchors(0, 375, 240)).toEqual([]);
+  expect(layoutStrands([], 375, 240)).toEqual([]);
+});

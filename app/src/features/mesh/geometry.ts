@@ -36,7 +36,8 @@ const SPAN = (78 * Math.PI) / 180;
 
 /** Each node's slice of the canopy, as [centre angle, width], 0 = straight up. */
 function sectors(n: number): [number, number][] {
-  if (n <= 1) return [[0, SPAN * 2]];
+  if (n <= 0) return [];
+  if (n === 1) return [[0, SPAN * 2]];
   const width = (2 * SPAN) / n;
   return Array.from({ length: n }, (_, i) => [-SPAN + width * (i + 0.5), width]);
 }

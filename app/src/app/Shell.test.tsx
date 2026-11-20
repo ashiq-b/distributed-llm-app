@@ -1,6 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import { setWidth } from "@/test/setup";
 import { useRole } from "@/lib/stores";
+import Crashed from "./Crashed";
 import Shell from "./Shell";
 
 test("Shell renders phone tabs under 900px and sidebar above", () => {
@@ -30,4 +31,19 @@ test("the split dock shows on desktop once a model is loading", () => {
   expect(screen.getByRole("complementary", { name: "Split" })).toHaveTextContent("40%");
   act(() => useRole.setState({ role: { role: "idle" } }));
   expect(screen.queryByRole("complementary", { name: "Split" })).toBeNull();
+});
+
+test("Devices renders before any device is found", () => {
+  setWidth(390);
+  useRole.setState({ role: { role: "idle" } });
+  render(<Shell />);
+  expect(screen.getByRole("heading", { name: "Devices" })).toBeInTheDocument();
+});
+
+test("a screen that throws shows the error and a reload, not a blank window", () => {
+  const Boom = () => { throw new Error("boom"); };
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  render(<Crashed><Boom /></Crashed>);
+  expect(screen.getByRole("alert")).toHaveTextContent("boom");
+  expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
 });
