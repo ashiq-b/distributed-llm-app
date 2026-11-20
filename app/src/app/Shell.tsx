@@ -9,6 +9,7 @@ import { freeMib } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import Notice from "./Notice";
 import RoleChip from "./RoleChip";
+import ThemeToggle from "./ThemeToggle";
 import Wordmark from "./Wordmark";
 import { routes } from "./routes";
 import { useIsDesktop } from "./useMediaQuery";
@@ -52,9 +53,12 @@ export default function Shell() {
           <nav aria-label="Sidebar" className={cn("flex min-h-0 flex-col overflow-hidden border-r pb-5 pt-7", layout.nav ? "px-3.5" : "items-center px-2")}>
             <div className={cn("flex items-center pb-8", layout.nav ? "justify-between pl-3" : "flex-col gap-5")}>
               {layout.nav ? <Wordmark /> : <WordmarkIcon />}
-              <Toggle label={layout.nav ? "Hide sidebar" : "Show sidebar"} side="right" onClick={layout.toggleNav}>
-                {layout.nav ? <PanelLeftClose /> : <PanelLeftOpen />}
-              </Toggle>
+              <div className={cn("flex items-center", layout.nav ? "gap-1" : "flex-col-reverse gap-4")}>
+                <ThemeToggle />
+                <Toggle label={layout.nav ? "Hide sidebar" : "Show sidebar"} side="right" onClick={layout.toggleNav}>
+                  {layout.nav ? <PanelLeftClose /> : <PanelLeftOpen />}
+                </Toggle>
+              </div>
             </div>
             <ul className="w-full space-y-1">
               {routes.map((r) => {
@@ -135,7 +139,10 @@ export default function Shell() {
       <div className="flex h-full min-w-0 flex-col">
         <header className="flex items-center justify-between gap-4 pb-2 pl-[max(1.25rem,env(safe-area-inset-left))] pr-[max(1.25rem,env(safe-area-inset-right))] pt-[calc(env(safe-area-inset-top)+0.75rem)]">
           <Wordmark />
-          <RoleChip className="justify-end" />
+          <div className="flex min-w-0 items-center gap-3">
+            <RoleChip className="justify-end" />
+            <ThemeToggle />
+          </div>
         </header>
 
         <main ref={main} className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-clip overscroll-contain pl-safe-l pr-safe-r">{screen}</main>

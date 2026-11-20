@@ -107,3 +107,11 @@
   .num { font-variant-numeric: tabular-nums; }
   .text-pretty { text-wrap: pretty; }
 }
+
+/* Theme switch: the new theme is revealed by a growing circle (see app/theme.ts), so the
+   default cross-fade is turned off. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
