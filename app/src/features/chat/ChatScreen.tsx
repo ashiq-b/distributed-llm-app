@@ -11,7 +11,7 @@ import MeshView from "@/features/mesh/MeshView";
 import { peerNodes } from "@/features/mesh/nodes";
 import { LayerBar } from "@/features/split/LayerBands";
 import LiveStats from "@/features/split/LiveStats";
-import SplitPanel from "@/features/split/SplitPanel";
+import SplitView from "@/features/split/SplitView";
 import { chatHistory, chatReset, chatSend, chatStop, leaveRole, type DeviceShare } from "@/lib/tauri";
 import { chosenPeers, classify, loadModel, useChat, useLayout, useModels, useNav, useNotice, usePeers, useRole } from "@/lib/stores";
 import { toneOf } from "@/features/split/LayerBands";
@@ -122,7 +122,7 @@ function SplitSheet({ shares: raw }: { shares: DeviceShare[] }) {
           <SheetTitle className="font-serif text-2xl font-medium">How it's split</SheetTitle>
           <SheetDescription>Live, from the devices doing the work.</SheetDescription>
         </SheetHeader>
-        <SplitPanel />
+        <SplitView />
       </SheetContent>
     </Sheet>
   );
@@ -234,7 +234,7 @@ export default function ChatScreen() {
             <Progress value={role.frac * 100} aria-label="Loading" />
             <p className="num text-sm text-muted-foreground">{Math.round(role.frac * 100)}%</p>
           </div>
-        ) : <SplitPanel />
+        ) : <SplitView />
       ) : role?.role === "worker" ? (
         <div className="space-y-4">
           <p className="text-pretty text-muted-foreground">This device is a worker, holding layers for other devices. To load a model here, switch it to Idle first.</p>

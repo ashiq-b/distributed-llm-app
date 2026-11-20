@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import SplitPanel from "@/features/split/SplitPanel";
+import SplitView from "@/features/split/SplitView";
 import { useDevice, useLayout, useNav, useRole } from "@/lib/stores";
 import { freeMib } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -125,7 +125,7 @@ export default function Shell() {
                   </Toggle>
                 </div>
                 <p className="mb-5 text-sm text-muted-foreground">Live, from the devices doing the work.</p>
-                <SplitPanel />
+                <SplitView />
               </div>
             )}
           </aside>

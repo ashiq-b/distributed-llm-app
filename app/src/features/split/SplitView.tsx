@@ -5,13 +5,13 @@ import { Progress } from "@/components/ui/progress";
 import MeshView from "@/features/mesh/MeshView";
 import { peerNodes, shareNodes } from "@/features/mesh/nodes";
 import { chosenPeers, useModels, usePeers, useRole } from "@/lib/stores";
-import { UNKNOWN, mib, seconds } from "@/lib/format";
-import { cn } from "@/lib/utils";
-import { LayerColumn, toneOf } from "./LayerBands";
+import { mib, seconds } from "@/lib/format";
+import DeviceBars from "./DeviceBar";
+import { LayerColumn } from "./LayerBands";
 import LiveStats from "./LiveStats";
 import { withPeerNames } from "./names";
 
-export default function SplitPanel() {
+export default function SplitView() {
   const role = useRole((s) => s.role);
   const peers = usePeers((s) => s.peers);
   const chosen = usePeers(useShallow(chosenPeers));
@@ -47,21 +47,8 @@ export default function SplitPanel() {
       <MeshView className="-mx-2 h-64" nodes={shareNodes(shares)} trunk={nameOf(model_id)} />
       <LiveStats />
       <div className="flex gap-5">
-        <LayerColumn shares={shares} className="w-28 shrink-0" />
-        <ul className="flex min-w-0 flex-1 flex-col justify-around gap-4">
-          {shares.map((s, i) => (
-            <li key={i} className="min-w-0">
-              <p className={cn("flex items-center gap-2 font-semibold", !s.is_remote && "text-signal")}>
-                <span aria-hidden className={cn("size-2 shrink-0 rounded-full", toneOf(shares, i))} />
-                <span className="truncate">{s.is_remote ? s.name : "This device"}</span>
-              </p>
-              <p className="truncate text-sm text-muted-foreground">{s.is_remote ? `Worker ${s.endpoint ?? ""}` : "Host"}</p>
-              <p className="num text-sm">
-                {s.layers ? `Layers ${s.layers[0]}–${s.layers[1]}` : `Layers ${UNKNOWN}`}, {s.buffer_mib == null ? UNKNOWN : `${s.buffer_mib.toFixed(1)} MiB`}
-              </p>
-            </li>
-          ))}
-        </ul>
+        <LayerColumn shares={shares} className="w-20 shrink-0 self-center" />
+        <div className="min-w-0 flex-1"><DeviceBars shares={shares} /></div>
       </div>
       {n > 0 && <p className="text-sm text-muted-foreground">{n} layers, placed by each device's free memory.</p>}
       <dl className="num grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 border-t pt-4 text-sm">
@@ -72,6 +59,7 @@ export default function SplitPanel() {
         <dt className="text-muted-foreground">Already on workers</dt>
         <dd>{mib(load.bytes_cached)}</dd>
       </dl>
+      <p className="text-xs text-muted-foreground">Source: llama.cpp load report.</p>
     </div>
   );
 }
