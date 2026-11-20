@@ -240,7 +240,10 @@ std::string              g_last_error;
 
 void log_cb(enum ggml_log_level level, const char * text, void * /*user*/) {
     dl_stats::feed(text);
-    if (level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR) {
+    // The lines the split view is read from stay in the app's log, so it can be checked
+    // against them: each device's buffer size and how many layers were offloaded.
+    const bool split_line = std::strstr(text, " model buffer size = ") || std::strstr(text, "offloaded");
+    if (split_line || level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR) {
         std::fputs(text, stderr);
         if (level == GGML_LOG_LEVEL_ERROR) {
             std::lock_guard<std::mutex> lk(g_mu);
