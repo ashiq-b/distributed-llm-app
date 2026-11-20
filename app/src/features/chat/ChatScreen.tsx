@@ -2,7 +2,7 @@
 // (Task 4.4 adds the remaining chat states.)
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Square } from "lucide-react";
+import { ArrowUp, Power, SquarePen, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -122,6 +122,9 @@ function Conversation({ modelId, shares }: { modelId: string; shares: DeviceShar
   const [think, setThink] = useState(false);
   const name = useModels((s) => s.models.find((m) => m.id === modelId)?.name ?? modelId);
   const end = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
+  // The field grows with what's typed, up to its max height, then scrolls.
+  const grow = (el: HTMLTextAreaElement) => { el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; };
 
   useEffect(() => { chatHistory().then((history) => useChat.setState({ history })).catch(fail); }, [fail]);
   useEffect(() => { end.current?.scrollIntoView?.({ block: "end" }); }, [history.length, streaming]);
@@ -130,6 +133,7 @@ function Conversation({ modelId, shares }: { modelId: string; shares: DeviceShar
     const t = text.trim();
     if (!t || sending) return;
     setText("");
+    if (box.current) box.current.style.height = "";
     useChat.setState((s) => ({ history: [...s.history, { role: "user", content: t }], streaming: "", summary: null, sending: true, live: null }));
     try {
       const s = await chatSend(t, think);
@@ -144,15 +148,15 @@ function Conversation({ modelId, shares }: { modelId: string; shares: DeviceShar
 
   return (
     <div className="flex min-h-[calc(100dvh-10rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] flex-col desk:min-h-[calc(100dvh-4.5rem)]">
-      <div className="flex items-baseline justify-between gap-3">
-        <h1 className="min-w-0 truncate font-serif text-3xl font-medium tracking-tight desk:text-4xl">{name}</h1>
-        <div className="flex shrink-0 gap-1">
-          <Button variant="ghost" size="sm" disabled={sending}
+      <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
+        <h1 className="min-w-0 text-balance break-words font-serif text-3xl font-medium tracking-tight desk:text-4xl">{name}</h1>
+        <div className="flex shrink-0 gap-2">
+          <Button variant="outline" size="sm" disabled={sending}
             onClick={() => chatReset().then(() => useChat.setState({ history: [], streaming: "", summary: null, live: null })).catch(fail)}>
-            New chat
+            <SquarePen aria-hidden />New chat
           </Button>
-          <Button variant="ghost" size="sm" disabled={sending} onClick={() => leaveRole().then((role) => useRole.setState({ role })).catch(fail)}>
-            Unload
+          <Button variant="outline" size="sm" disabled={sending} onClick={() => leaveRole().then((role) => useRole.setState({ role })).catch(fail)}>
+            <Power aria-hidden />Unload
           </Button>
         </div>
       </div>
@@ -182,11 +186,12 @@ function Conversation({ modelId, shares }: { modelId: string; shares: DeviceShar
       <div ref={end} />
 
       <form className="sticky bottom-0 -mx-1 mt-4 bg-background pb-3 pt-2" onSubmit={(e) => { e.preventDefault(); send(); }}>
-        <div className="rounded-[22px] border border-input bg-raised py-1.5 pl-4 pr-1.5">
+        <div className="cursor-text rounded-[22px] border border-input bg-raised py-1.5 pl-4 pr-1.5 transition-[border-color,box-shadow] focus-within:border-signal/60 focus-within:shadow-[0_0_0_4px_hsl(var(--signal)/0.14)]"
+          onClick={(e) => { if (e.target === e.currentTarget) box.current?.focus(); }}>
           <label htmlFor="msg" className="sr-only">Message</label>
-          <textarea id="msg" rows={1} placeholder="Ask something"
-            className="max-h-40 min-h-10 w-full resize-none bg-transparent py-2 text-base outline-none placeholder:text-muted-foreground"
-            value={text} onChange={(e) => setText(e.target.value)}
+          <textarea id="msg" ref={box} rows={1} placeholder="Ask something" enterKeyHint={desktop ? "send" : "enter"}
+            className="block max-h-40 min-h-10 w-full resize-none bg-transparent py-2 pr-2.5 text-base leading-6 outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
+            value={text} onChange={(e) => { setText(e.target.value); grow(e.target); }}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && desktop) { e.preventDefault(); send(); } }} />
           <div className="flex items-center justify-between">
             <label className="flex min-h-11 items-center gap-2 text-sm text-muted-foreground">

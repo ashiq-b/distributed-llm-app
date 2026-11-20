@@ -20,22 +20,34 @@ export interface Strand {
   tone: number;
 }
 
-export const MIN_STRANDS = 8;
-export const MAX_STRANDS = 40;
+export const MIN_STRANDS = 16;
+export const MAX_STRANDS = 96;
 
 export const strandCount = (weight: number) =>
   Math.round(MIN_STRANDS + Math.min(1, Math.max(0, weight)) * (MAX_STRANDS - MIN_STRANDS));
 
-/** Node anchors on a shallow arc: middle ones highest, outer ones lower, like a canopy. */
+/** The canopy: an elliptical dome over a trunk that rises from the bottom centre. */
+export function canopy(w: number, h: number) {
+  return { cx: w / 2, cy: h * 0.7, rx: w * 0.44, ry: h * 0.46 };
+}
+
+/** Widest angle from straight up, either side, that the canopy opens to. */
+const SPAN = (78 * Math.PI) / 180;
+
+/** Each node's slice of the canopy, as [centre angle, width], 0 = straight up. */
+function sectors(n: number): [number, number][] {
+  if (n <= 1) return [[0, SPAN * 2]];
+  const width = (2 * SPAN) / n;
+  return Array.from({ length: n }, (_, i) => [-SPAN + width * (i + 0.5), width]);
+}
+
+/** Where a node's label sits: just past the rim of its slice of the canopy. */
 export function anchors(n: number, w: number, h: number): Point[] {
-  return Array.from({ length: n }, (_, i) => {
-    const u = n === 1 ? 0.5 : i / (n - 1);
-    const spread = n === 1 ? 0 : Math.min(0.76, 0.3 + n * 0.12);
-    return {
-      x: w * (0.5 + (u - 0.5) * spread),
-      y: h * 0.34 + Math.abs(u - 0.5) * 2 * h * 0.2,
-    };
-  });
+  const c = canopy(w, h);
+  return sectors(n).map(([a]) => ({
+    x: Math.min(w - 8, Math.max(8, c.cx + c.rx * 1.04 * Math.sin(a))),
+    y: Math.max(8, c.cy - c.ry * 1.04 * Math.cos(a)),
+  }));
 }
 
 /** Seeded so a node's strands keep their shape across renders. */
@@ -54,28 +66,28 @@ function hash(text: string) {
 }
 
 export function layoutStrands(nodes: MeshNode[], w: number, h: number): Strand[] {
-  const tops = anchors(nodes.length, w, h);
-  const base: Point = { x: w / 2, y: h + 4 };
-  // Each node's strands open into a canopy under it: wide when few nodes share the view.
-  const fan = Math.min(w * 0.9, w * (0.62 / Math.max(1, nodes.length) + 0.12));
+  const c = canopy(w, h);
+  const slices = sectors(nodes.length);
+  const trunkTop = c.cy + h * 0.06;
   const strands: Strand[] = [];
   nodes.forEach((node, i) => {
     const r = random(hash(node.id));
-    const top = tops[i];
+    const [mid, width] = slices[i];
     for (let k = 0, n = strandCount(node.weight); k < n; k++) {
-      const off = (r() - 0.5) * fan;
-      const reach = Math.abs(off) / (fan / 2);           // 0 under the node, 1 at the canopy's edge
+      const a = mid + (r() - 0.5) * width * 0.96;
+      const reach = 0.55 + Math.sqrt(r()) * 0.45;          // most tips near the rim
       const end = {
-        x: Math.min(w - 4, Math.max(4, top.x + off)),
-        y: top.y + 14 + reach * reach * h * 0.22 + r() * h * 0.05,
+        x: Math.min(w - 2, Math.max(2, c.cx + c.rx * reach * Math.sin(a))),
+        y: Math.max(2, c.cy - c.ry * reach * Math.cos(a)),
       };
+      const lift = 0.35 + r() * 0.35;                       // how high the fibre stays in the trunk
       strands.push({
         node: i,
-        p0: { x: base.x + (r() - 0.5) * w * 0.035, y: base.y },
-        p1: { x: base.x + (r() - 0.5) * w * 0.05, y: h * (0.5 + r() * 0.15) },
-        p2: { x: end.x - off * (0.25 + r() * 0.3), y: end.y + (h - end.y) * (0.12 + r() * 0.2) },
+        p0: { x: c.cx + (r() - 0.5) * w * 0.05, y: h + 2 },
+        p1: { x: c.cx + (r() - 0.5) * w * 0.03, y: trunkTop - (trunkTop - end.y) * lift * 0.5 },
+        p2: { x: c.cx + (end.x - c.cx) * (0.35 + r() * 0.3), y: end.y + (trunkTop - end.y) * (0.25 + r() * 0.25) },
         p3: end,
-        tone: 0.25 + r() * 0.75,
+        tone: 0.2 + r() * 0.8,
       });
     }
   });

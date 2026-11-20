@@ -1,9 +1,9 @@
 // The frame around every screen: bottom tabs on a phone, a sidebar on desktop (≥ 900 px)
-// with the split view docked on the right.
-import { useEffect, useRef } from "react";
+// with the split view docked on the right while a model is loading or loaded.
+import { useEffect, useRef, useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import SplitPanel from "@/features/split/SplitPanel";
-import { useDevice, useNav } from "@/lib/stores";
+import { useDevice, useNav, useRole } from "@/lib/stores";
 import { freeMib } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import Notice from "./Notice";
@@ -18,6 +18,9 @@ export default function Shell() {
   const route = routes.find((r) => r.id === current)!;
   const info = useDevice((s) => s.info);
   const main = useRef<HTMLElement>(null);
+  const role = useRole((s) => s.role?.role);
+  const split = role === "host" || role === "loading";
+  const typing = useTyping();
 
   // A new screen starts at its top.
   useEffect(() => { main.current?.scrollTo?.({ top: 0 }); }, [current]);
@@ -32,7 +35,8 @@ export default function Shell() {
   if (desktop) {
     return (
       <TooltipProvider>
-        <div className="grid h-full grid-cols-[15rem_minmax(0,1fr)_21rem] wide:grid-cols-[16rem_minmax(0,1fr)_24rem]">
+        <div className={cn("grid h-full",
+          split ? "grid-cols-[15rem_minmax(0,1fr)_21rem] wide:grid-cols-[16rem_minmax(0,1fr)_24rem]" : "grid-cols-[15rem_minmax(0,1fr)] wide:grid-cols-[16rem_minmax(0,1fr)]")}>
           <nav aria-label="Sidebar" className="flex min-h-0 flex-col border-r px-3.5 pb-5 pt-7">
             <div className="px-3 pb-8"><Wordmark /></div>
             <ul className="space-y-1">
@@ -61,11 +65,11 @@ export default function Shell() {
 
           <main ref={main} className="min-w-0 overflow-y-auto overflow-x-clip">{screen}</main>
 
-          <aside aria-label="Split" className="min-h-0 overflow-y-auto overflow-x-clip border-l bg-surface px-7 pb-7 pt-10">
+          {split && <aside aria-label="Split" className="min-h-0 overflow-y-auto overflow-x-clip border-l bg-surface px-7 pb-7 pt-10">
             <h2 className="mb-1 font-serif text-2xl font-medium">How it's split</h2>
             <p className="mb-5 text-sm text-muted-foreground">Live, from the devices doing the work.</p>
             <SplitPanel />
-          </aside>
+          </aside>}
         </div>
       </TooltipProvider>
     );
@@ -81,7 +85,8 @@ export default function Shell() {
 
         <main ref={main} className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-clip overscroll-contain pl-safe-l pr-safe-r">{screen}</main>
 
-        <nav aria-label="Tabs" className="border-t bg-surface pb-safe-b pl-safe-l pr-safe-r">
+        {/* Out of the way while typing: the keyboard already takes half the screen. */}
+        <nav aria-label="Tabs" hidden={typing} className="border-t bg-surface pb-safe-b pl-safe-l pr-safe-r">
           <ul className="grid grid-cols-3 px-2">
             {routes.map((r) => {
               const on = r.id === current;
@@ -107,4 +112,23 @@ export default function Shell() {
       </div>
     </TooltipProvider>
   );
+}
+
+/** True while a text field has focus (the on-screen keyboard is up on a phone). */
+function useTyping() {
+  const [typing, setTyping] = useState(false);
+  useEffect(() => {
+    const check = () => {
+      const el = document.activeElement;
+      setTyping(el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit"].includes(el.type)));
+    };
+    const later = () => setTimeout(check, 0);           // focus has moved on by then
+    document.addEventListener("focusin", check);
+    document.addEventListener("focusout", later);
+    return () => {
+      document.removeEventListener("focusin", check);
+      document.removeEventListener("focusout", later);
+    };
+  }, []);
+  return typing;
 }

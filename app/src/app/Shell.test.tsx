@@ -1,5 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import { setWidth } from "@/test/setup";
+import { useRole } from "@/lib/stores";
 import Shell from "./Shell";
 
 test("Shell renders phone tabs under 900px and sidebar above", () => {
@@ -18,5 +19,15 @@ test("Shell renders phone tabs under 900px and sidebar above", () => {
   expect(side).toHaveTextContent("Models");
   expect(side).toHaveTextContent("Chat");
   expect(screen.queryByRole("navigation", { name: "Tabs" })).toBeNull();
-  expect(screen.getByRole("complementary", { name: "Split" })).toBeInTheDocument();
+  // Nothing loaded: no empty split dock taking a third of the window.
+  expect(screen.queryByRole("complementary", { name: "Split" })).toBeNull();
+});
+
+test("the split dock shows on desktop once a model is loading", () => {
+  setWidth(1280);
+  useRole.setState({ role: { role: "loading", model_id: "lfm3-1.7b", frac: 0.4 } });
+  render(<Shell />);
+  expect(screen.getByRole("complementary", { name: "Split" })).toHaveTextContent("40%");
+  act(() => useRole.setState({ role: { role: "idle" } }));
+  expect(screen.queryByRole("complementary", { name: "Split" })).toBeNull();
 });

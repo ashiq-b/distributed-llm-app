@@ -101,6 +101,10 @@ export const addManualPeer = (addr: string) => invoke<PeerView>("add_manual_peer
 export const onPeersChanged = (cb: (peers: PeerView[]) => void): Promise<UnlistenFn> =>
   listen<{ peers: PeerView[] }>("peers-changed", (e) => cb(e.payload.peers));
 
+/** Ids of peers whose discovery heartbeat just arrived (about every 5 s each). */
+export const onPeersHeard = (cb: (ids: string[]) => void): Promise<UnlistenFn> =>
+  listen<{ ids: string[] }>("peers-heard", (e) => cb(e.payload.ids));
+
 // ---- Models ----
 
 export type ModelState =

@@ -55,6 +55,12 @@ struct PeersChanged {
     peers: Vec<PeerView>,
 }
 
+/// Peers whose heartbeat just arrived (every few seconds while they're on the network).
+#[derive(Clone, Serialize)]
+struct PeersHeard {
+    ids: Vec<String>,
+}
+
 #[derive(Clone, Serialize)]
 struct Token {
     piece: String,
@@ -295,7 +301,7 @@ fn emit_peers(app: &AppHandle, peers: Vec<discovery::PeerInfo>) {
 }
 
 /// Start looking for other devices and announcing this one, whatever its role (once).
-/// Emits `peers-changed` whenever the list changes.
+/// Emits `peers-changed` whenever the list changes, and `peers-heard` as heartbeats arrive.
 /// Async: on iOS the plugin call needs the main thread free.
 #[tauri::command]
 pub async fn discovery_start(app: AppHandle) -> Result<Vec<PeerView>, String> {
@@ -303,7 +309,16 @@ pub async fn discovery_start(app: AppHandle) -> Result<Vec<PeerView>, String> {
         let discovery = app.state::<Discovery>();
         let backend = discovery.backend(&app)?;
         let emitter = app.clone();
-        backend.browse(move |peers| emit_peers(&emitter, peers))?;
+        backend.browse(move |peers, heard| {
+            if let Some(peers) = peers {
+                emit_peers(&emitter, peers);
+            }
+            let self_id = &emitter.state::<Discovery>().self_id;
+            let ids: Vec<String> = heard.into_iter().filter(|id| id != self_id).collect();
+            if !ids.is_empty() {
+                let _ = emitter.emit("peers-heard", PeersHeard { ids });
+            }
+        })?;
         if discovery.start_announcing() {
             let me = app.clone();
             backend.advertise(move || announcement(&me))?;

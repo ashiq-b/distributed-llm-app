@@ -6,10 +6,12 @@ import { onPulse, type Pulse } from "@/lib/pulse";
 import { cn } from "@/lib/utils";
 import { anchors, at, layoutStrands, type MeshNode, type Strand } from "./geometry";
 
-interface Light { strand: number; t: number; speed: number }
+/** A glint running along one strand. `back`: from the tip down to the trunk (a peer's
+ * heartbeat arriving here); otherwise up from the trunk (a token, weights going out). */
+interface Light { strand: number; t: number; speed: number; back: boolean }
 
-const MAX_LIGHTS = 240;
-const TAIL = 0.14;
+const MAX_LIGHTS = 320;
+const TAIL = 0.16;
 
 function cssColor(name: string, alpha: number) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -18,19 +20,27 @@ function cssColor(name: string, alpha: number) {
 
 const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
-/** Which strands a pulse lights: a token crosses every device in the split. */
-function pick(p: Pulse, nodes: MeshNode[], strands: Strand[]): number[] {
+function sample<T>(xs: T[], n: number): T[] {
+  const pool = [...xs];
+  const out: T[] = [];
+  while (out.length < n && pool.length) out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  return out;
+}
+
+/** Which strands a pulse lights, and which way. A token crosses every device in the split. */
+function pick(p: Pulse, nodes: MeshNode[], strands: Strand[]): { strand: number; back: boolean; delay: number }[] {
   const of = (i: number) => strands.flatMap((s, k) => (s.node === i ? [k] : []));
-  const one = (ks: number[]) => (ks.length ? [ks[Math.floor(Math.random() * ks.length)]] : []);
   switch (p.kind) {
     case "token":
-      return nodes.flatMap((_, i) => one(of(i)));
+      return nodes.flatMap((_, i) => sample(of(i), 2).map((strand) => ({ strand, back: false, delay: 0 })));
     case "heartbeat": {
       const i = nodes.findIndex((n) => n.id === p.peerId);
-      return i < 0 ? [] : [...one(of(i)), ...one(of(i))];
+      if (i < 0) return [];
+      const mine = of(i);
+      return sample(mine, Math.ceil(mine.length * 0.3)).map((strand) => ({ strand, back: true, delay: Math.random() * 450 }));
     }
     case "load":
-      return nodes.flatMap((n, i) => (n.self ? [] : [...one(of(i)), ...one(of(i))]));
+      return nodes.flatMap((n, i) => (n.self ? [] : sample(of(i), 4).map((strand) => ({ strand, back: false, delay: Math.random() * 200 }))));
   }
 }
 
@@ -73,24 +83,44 @@ export default function MeshView({
     c.height = h * dpr;
     const strands = layoutStrands(nodes, w, h);
 
+    const dark = document.documentElement.dataset.theme === "dark";
+
     // Strands at rest, drawn once.
     const rest = document.createElement("canvas");
     rest.width = c.width;
     rest.height = c.height;
     const r = rest.getContext("2d")!;
     r.scale(dpr, dpr);
-    r.lineWidth = 0.75;
+    r.lineWidth = 0.6;
     for (const s of strands) {
-      r.strokeStyle = nodes[s.node].self ? cssColor("--signal", 0.18 + 0.32 * s.tone) : cssColor("--strand", 0.07 + 0.2 * s.tone);
+      r.strokeStyle = nodes[s.node].self ? cssColor("--signal", 0.16 + 0.34 * s.tone) : cssColor("--strand", 0.08 + 0.3 * s.tone);
       r.beginPath();
       r.moveTo(s.p0.x, s.p0.y);
       r.bezierCurveTo(s.p1.x, s.p1.y, s.p2.x, s.p2.y, s.p3.x, s.p3.y);
       r.stroke();
-    }
-    for (const [i, a] of anchors(nodes.length, w, h).entries()) {
-      r.fillStyle = nodes[i].self ? cssColor("--signal", 0.9) : cssColor("--strand", 0.55);
+      r.fillStyle = nodes[s.node].self ? cssColor("--signal", 0.5 * s.tone) : cssColor("--strand", 0.45 * s.tone);
       r.beginPath();
-      r.arc(a.x, a.y + 12, 2.5, 0, Math.PI * 2);
+      r.arc(s.p3.x, s.p3.y, 0.9, 0, Math.PI * 2);
+      r.fill();
+    }
+    // The trunk fades out at its foot (whatever the background), so the strands read as
+    // rising out of the ground.
+    const fade = r.createLinearGradient(0, h * 0.8, 0, h);
+    fade.addColorStop(0, "rgba(0,0,0,0)");
+    fade.addColorStop(1, "rgba(0,0,0,0.9)");
+    r.globalCompositeOperation = "destination-out";
+    r.fillStyle = fade;
+    r.fillRect(0, h * 0.8, w, h * 0.2);
+    r.globalCompositeOperation = "source-over";
+    for (const [i, a] of anchors(nodes.length, w, h).entries()) {
+      const color = nodes[i].self ? "--signal" : "--strand";
+      r.fillStyle = cssColor(color, 0.18);
+      r.beginPath();
+      r.arc(a.x, a.y, 5, 0, Math.PI * 2);
+      r.fill();
+      r.fillStyle = cssColor(color, 0.85);
+      r.beginPath();
+      r.arc(a.x, a.y, 2.2, 0, Math.PI * 2);
       r.fill();
     }
 
@@ -108,35 +138,44 @@ export default function MeshView({
       ctx.drawImage(rest, 0, 0);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.lineCap = "round";
+      ctx.globalCompositeOperation = dark ? "lighter" : "source-over";
       lights = lights.filter((l) => (l.t += l.speed * dt) < 1 + TAIL);
       for (const l of lights) {
+        if (l.t <= 0) continue;                              // still waiting to start
         const s = strands[l.strand];
-        const head = Math.min(1, l.t);
+        const along = (t: number) => at(s, l.back ? 1 - t : t);
         const color = nodes[s.node].self ? selfColor : lightColor;
+        const out = l.t > 1 ? Math.max(0, 1 - (l.t - 1) / TAIL) : 1;
         ctx.strokeStyle = color;
-        const steps = 10;
+        const steps = 12;
         for (let k = 0; k < steps; k++) {
-          const t0 = Math.max(0, l.t - TAIL + (TAIL * k) / steps);
-          const t1 = Math.max(0, l.t - TAIL + (TAIL * (k + 1)) / steps);
+          const t0 = l.t - TAIL + (TAIL * k) / steps;
+          const t1 = l.t - TAIL + (TAIL * (k + 1)) / steps;
           if (t1 <= 0 || t0 >= 1) continue;
-          const a = at(s, Math.min(1, t0)), b = at(s, Math.min(1, t1));
-          ctx.globalAlpha = ((k + 1) / steps) * (l.t > 1 ? Math.max(0, 1 - (l.t - 1) / TAIL) : 1);
-          ctx.lineWidth = 1.6;
+          const p0 = along(Math.max(0, t0)), p1 = along(Math.min(1, t1));
+          const f = (k + 1) / steps;
+          ctx.globalAlpha = f * f * out;
+          ctx.lineWidth = 0.8 + f * 1.2;
           ctx.beginPath();
-          ctx.moveTo(a.x, a.y);
-          ctx.lineTo(b.x, b.y);
+          ctx.moveTo(p0.x, p0.y);
+          ctx.lineTo(p1.x, p1.y);
           ctx.stroke();
         }
         if (l.t <= 1) {
-          const p = at(s, head);
-          ctx.globalAlpha = 0.9;
+          const p = along(l.t);
           ctx.fillStyle = color;
+          ctx.globalAlpha = 0.25;
           ctx.beginPath();
-          ctx.arc(p.x, p.y, 1.6, 0, Math.PI * 2);
+          ctx.arc(p.x, p.y, 3.2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 0.95;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 1.3, 0, Math.PI * 2);
           ctx.fill();
         }
       }
       ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
       frame = lights.length ? requestAnimationFrame(draw) : 0;
       if (!frame) last = 0;
     };
@@ -145,8 +184,9 @@ export default function MeshView({
     const stop = listen && !reducedMotion()
       ? onPulse((p) => {
           if (document.hidden) return;
-          for (const k of pick(p, nodes, strands)) {
-            if (lights.length < MAX_LIGHTS) lights.push({ strand: k, t: 0, speed: 1 / (700 + Math.random() * 500) });
+          for (const { strand, back, delay } of pick(p, nodes, strands)) {
+            const speed = 1 / (900 + Math.random() * 600);
+            if (lights.length < MAX_LIGHTS) lights.push({ strand, back, speed, t: -delay * speed });
           }
           if (!frame) frame = requestAnimationFrame(draw);
         })
@@ -165,9 +205,9 @@ export default function MeshView({
           if (!a || size.w === 0) return <li key={n.id} className="sr-only">{n.label}{n.detail ? `, ${n.detail}` : ""}</li>;
           const side = a.x < size.w * 0.34 ? "left" : a.x > size.w * 0.66 ? "right" : "mid";
           const style =
-            side === "left" ? { left: Math.max(6, a.x - 28), top: a.y }
-            : side === "right" ? { right: Math.max(6, size.w - a.x - 28), top: a.y }
-            : { left: a.x, top: a.y, transform: "translateX(-50%)" };
+            side === "left" ? { left: Math.max(6, a.x - 24), top: a.y - 10 }
+            : side === "right" ? { right: Math.max(6, size.w - a.x - 24), top: a.y - 10 }
+            : { left: a.x, top: a.y - 10, transform: "translateX(-50%)" };
           return (
             <li
               key={n.id}

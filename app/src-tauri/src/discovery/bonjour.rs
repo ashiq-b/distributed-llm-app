@@ -38,8 +38,9 @@ impl Bonjour {
         Ok(Bonjour { app, registry, browsing: AtomicBool::new(false), advertising: Mutex::new(None), announce_now: Arc::default() })
     }
 
-    /// Start browsing (once). `on_change` gets the full list whenever it changes.
-    pub fn browse(&self, on_change: impl Fn(Vec<PeerInfo>) + Send + 'static) -> Result<(), String> {
+    /// Start browsing (once). `on_event` gets the full list when it changed, and the ids
+    /// of peers whose heartbeat just arrived.
+    pub fn browse(&self, on_event: impl Fn(Option<Vec<PeerInfo>>, Vec<String>) + Send + 'static) -> Result<(), String> {
         if self.browsing.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
@@ -64,10 +65,11 @@ impl Bonjour {
                         }
                     };
                     changed |= reg.expire(now);
-                    if changed {
-                        let peers = reg.list();
+                    let heard = reg.heard_since(now);
+                    if changed || !heard.is_empty() {
+                        let peers = changed.then(|| reg.list());
                         drop(reg);
-                        on_change(peers);
+                        on_event(peers, heard);
                     } else {
                         drop(reg);
                     }

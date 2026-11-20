@@ -26,3 +26,13 @@ test("node anchors stay inside the view", () => {
     }
   }
 });
+
+test("every strand ends inside the view", () => {
+  const nodes = ["a", "b", "c", "d"].map((id, i) => ({ id, label: id, weight: i / 3 }));
+  for (const s of layoutStrands(nodes, 375, 240)) {
+    expect(s.p3.x).toBeGreaterThanOrEqual(0);
+    expect(s.p3.x).toBeLessThanOrEqual(375);
+    expect(s.p3.y).toBeGreaterThanOrEqual(0);
+    expect(s.p3.y).toBeLessThanOrEqual(240);
+  }
+});

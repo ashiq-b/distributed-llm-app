@@ -51,7 +51,7 @@ export default function DevicesScreen() {
         <h1 className="font-serif text-4xl font-medium tracking-tight">Devices</h1>
         <div className="relative mt-2">
           <MeshView
-            className="h-60 desk:h-72"
+            className="h-72 desk:h-80"
             nodes={peerNodes(peers)}
             trunk={info ? `${info.name}, ${freeMib(info.free_mem_mb)}` : undefined}
           />

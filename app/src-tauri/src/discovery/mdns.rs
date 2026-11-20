@@ -51,8 +51,9 @@ impl Mdns {
         })
     }
 
-    /// Start browsing (once). `on_change` gets the full list whenever it changes.
-    pub fn browse(&self, on_change: impl Fn(Vec<PeerInfo>) + Send + 'static) -> Result<(), String> {
+    /// Start browsing (once). `on_event` gets the full list when it changed, and the ids
+    /// of peers whose heartbeat just arrived.
+    pub fn browse(&self, on_event: impl Fn(Option<Vec<PeerInfo>>, Vec<String>) + Send + 'static) -> Result<(), String> {
         if self.browsing.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
@@ -65,6 +66,7 @@ impl Mdns {
             .name("mdns-browse".into())
             .spawn(move || loop {
                 let event = events.recv_timeout(Duration::from_secs(1));
+                let since = Instant::now();
                 let mut reg = registry.lock().unwrap();
                 let mut changed = match event {
                     Ok(ServiceEvent::ServiceResolved(svc)) => {
@@ -75,10 +77,11 @@ impl Mdns {
                     Err(RecvTimeoutError::Disconnected) => break,
                 };
                 changed |= reg.expire(Instant::now());
-                if changed {
-                    let peers = reg.list();
+                let heard = reg.heard_since(since);
+                if changed || !heard.is_empty() {
+                    let peers = changed.then(|| reg.list());
                     drop(reg);
-                    on_change(peers);
+                    on_event(peers, heard);
                 }
             })
             .map_err(|e| e.to_string())?;
@@ -178,7 +181,7 @@ mod tests {
         mdns.advertise(move || me.clone()).unwrap();
 
         let (tx, rx) = std::sync::mpsc::channel();
-        mdns.browse(move |peers| { let _ = tx.send(peers); }).unwrap();
+        mdns.browse(move |peers, _| { if let Some(peers) = peers { let _ = tx.send(peers); } }).unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(5);
         let found = loop {
@@ -201,7 +204,7 @@ mod tests {
         let mdns = Mdns::new(registry.clone()).unwrap();
         let me = peer(&id, "127.0.0.1");
         mdns.advertise(move || me.clone()).unwrap();
-        mdns.browse(|_| {}).unwrap();
+        mdns.browse(|_, _| {}).unwrap();
 
         let listed = || registry.lock().unwrap().list().iter().any(|p| p.id == id);
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -226,7 +229,8 @@ mod tests {
         let mdns = Mdns::new(registry.clone()).unwrap();
         let me = peer(&id, "127.0.0.1");
         mdns.advertise(move || me.clone()).unwrap();
-        mdns.browse(|_| {}).unwrap();
+        let (tx, heard) = std::sync::mpsc::channel::<String>();
+        mdns.browse(move |_, ids| ids.into_iter().for_each(|i| { let _ = tx.send(i); })).unwrap();
 
         let seen = || registry.lock().unwrap().list().into_iter().find(|p| p.id == id).map(|p| p.last_seen);
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -238,6 +242,9 @@ mod tests {
         std::thread::sleep(HEARTBEAT + Duration::from_secs(2));
         let later = seen().expect("peer expired while still announcing");
         assert!(later > first, "last_seen was not refreshed by the heartbeat");
+        // Each heartbeat is reported as heard (the UI's pulse), not only list changes.
+        let times = heard.try_iter().filter(|i| *i == id).count();
+        assert!(times >= 2, "heartbeat reported {times} time(s), expected the first advert and at least one heartbeat");
     }
 
     #[test]
@@ -250,7 +257,7 @@ mod tests {
         let role = Arc::new(Mutex::new(DeviceRole::Idle));
         let (me, now) = (peer(&id, "127.0.0.1"), role.clone());
         mdns.advertise(move || PeerInfo { role: Some(*now.lock().unwrap()), ..me.clone() }).unwrap();
-        mdns.browse(|_| {}).unwrap();
+        mdns.browse(|_, _| {}).unwrap();
 
         let role_of = || registry.lock().unwrap().list().into_iter().find(|p| p.id == id).and_then(|p| p.role);
         let wait_for = |want: DeviceRole, within: Duration| {

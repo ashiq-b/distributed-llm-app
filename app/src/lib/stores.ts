@@ -3,7 +3,8 @@
 import { create } from "zustand";
 import {
   deviceInfo, roleState, discoveryStart, catalog, chatHistory,
-  onRoleChanged, onPeersChanged, onToken, onDownloadProgress,
+  onRoleChanged, onPeersChanged,
+  onPeersHeard, onToken, onDownloadProgress,
   type DeviceInfo, type RoleState, type PeerView, type ModelView, type DownloadProgress,
   type ChatMessage, type GenSummary,
 } from "./tauri";
@@ -102,10 +103,8 @@ export function connectStores(): () => void {
       useRole.setState({ role });
       refreshHistory();
     }),
-    onPeersChanged((peers) => {
-      usePeers.setState({ peers });
-      peers.forEach((p) => emitPulse({ kind: "heartbeat", peerId: p.id }));
-    }),
+    onPeersChanged((peers) => usePeers.setState({ peers })),
+    onPeersHeard((ids) => ids.forEach((peerId) => emitPulse({ kind: "heartbeat", peerId }))),
     onToken((piece) => {
       useChat.setState((s) => ({ streaming: s.streaming + piece, live: addToken(s.live, performance.now()) }));
       emitPulse({ kind: "token" });

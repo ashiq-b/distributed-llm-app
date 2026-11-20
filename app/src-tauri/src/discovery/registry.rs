@@ -39,6 +39,11 @@ impl PeerRegistry {
         changed
     }
 
+    /// Announced peers heard at or after `since` (a heartbeat arrived), for the UI's pulse.
+    pub fn heard_since(&self, since: Instant) -> Vec<String> {
+        self.peers.values().filter(|p| p.source != PeerSource::Manual && p.last_seen >= since).map(|p| p.id.clone()).collect()
+    }
+
     /// The peer said goodbye. Returns true if it was listed.
     pub fn remove_fullname(&mut self, fullname: &str) -> bool {
         self.fullnames.remove(fullname).is_some_and(|id| self.peers.remove(&id).is_some())
