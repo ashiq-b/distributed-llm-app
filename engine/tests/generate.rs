@@ -11,7 +11,7 @@ fn question() -> Vec<ChatMessage> {
 }
 
 fn greedy(max_tokens: u32) -> GenParams {
-    GenParams { max_tokens, temperature: 0.0, seed: 1 }
+    GenParams { max_tokens, temperature: 0.0, seed: 1, think: false }
 }
 
 #[test]
@@ -44,10 +44,12 @@ fn cancel_stops_generation() {
     let _g = serial();
     let Some(model) = test_model() else { return };
     let host = Host::load(&model, &[], None, |_| {}).unwrap();
+    // A question with a long answer (a one-word answer can end before the cancel lands).
+    let long = vec![ChatMessage { role: ChatRole::User, content: "Write a long story about a lighthouse keeper.".into() }];
 
     let mut pieces = 0;
     let summary = host
-        .generate(&question(), greedy(200), |_| {
+        .generate(&long, greedy(200), |_| {
             pieces += 1;
             if pieces == 3 {
                 host.cancel();
@@ -59,7 +61,7 @@ fn cancel_stops_generation() {
     assert!(summary.tokens <= 4, "generated {} tokens after cancel", summary.tokens);
 
     // Returning Break from the callback stops it too.
-    let summary = host.generate(&question(), greedy(200), |_| ControlFlow::Break(())).unwrap();
+    let summary = host.generate(&long, greedy(200), |_| ControlFlow::Break(())).unwrap();
     assert_eq!(summary.stopped, StopReason::Cancelled);
 }
 
@@ -105,5 +107,42 @@ fn worker_loss_returns_error() {
     let fresh = RpcServer::spawn();
     let host = Host::load(&model, &[fresh.endpoint()], None, |_| {}).unwrap();
     let summary = host.generate(&question(), greedy(4), |_| ControlFlow::Continue(())).unwrap();
+    assert!(summary.tokens > 0);
+}
+
+#[test]
+fn think_off_answers_without_thinking() {
+    let _g = serial();
+    let Some(model) = test_model() else { return };
+    let host = Host::load(&model, &[], None, |_| {}).unwrap();
+    let mut out = String::new();
+    let summary = host.generate(&question(), greedy(64), |p| { out.push_str(p); ControlFlow::Continue(()) }).unwrap();
+    eprintln!("think off: {out:?} ({summary:?})");
+    assert_eq!(summary.stopped, StopReason::Eos);
+    assert!(!out.contains("<think>") && !out.contains("</think>"), "thought anyway: {out:?}");
+    assert!(out.contains("Paris"), "no answer: {out:?}");
+}
+
+#[test]
+fn limit_hit_while_thinking_is_reported() {
+    let _g = serial();
+    let Some(model) = test_model() else { return };
+    let host = Host::load(&model, &[], None, |_| {}).unwrap();
+    let mut out = String::new();
+    let think = GenParams { think: true, ..greedy(8) };
+    let summary = host.generate(&question(), think, |p| { out.push_str(p); ControlFlow::Continue(()) }).unwrap();
+    eprintln!("think on, 8 tokens: {out:?}");
+    assert!(out.starts_with("<think>"), "the reasoning is streamed, tag included: {out:?}");
+    assert_eq!(summary.stopped, StopReason::MaxTokensWhileThinking);
+}
+
+#[test]
+fn answer_budget_shrinks_to_fit_the_context() {
+    let _g = serial();
+    let Some(model) = test_model() else { return };
+    let host = Host::load(&model, &[], None, |_| {}).unwrap();
+    // A long conversation plus a large answer budget still fits: the budget gives way.
+    let long = vec![ChatMessage { role: ChatRole::User, content: format!("{} Say OK.", "This is filler text. ".repeat(500)) }];
+    let summary = host.generate(&long, greedy(4000), |_| ControlFlow::Continue(())).unwrap();
     assert!(summary.tokens > 0);
 }

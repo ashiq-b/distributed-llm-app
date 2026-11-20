@@ -11,6 +11,7 @@ pub mod txt;
 use std::hash::{BuildHasher, RandomState};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -41,11 +42,12 @@ pub struct Discovery {
     pub self_id: String,
     registry: Arc<Mutex<PeerRegistry>>,
     backend: Mutex<Option<Arc<Backend>>>,
+    announcing: AtomicBool,
 }
 
 impl Discovery {
     pub fn new(self_id: String) -> Discovery {
-        Discovery { self_id, registry: Arc::default(), backend: Mutex::new(None) }
+        Discovery { self_id, registry: Arc::default(), backend: Mutex::new(None), announcing: AtomicBool::new(false) }
     }
 
     pub fn backend(&self, app: &AppHandle) -> Result<Arc<Backend>, String> {
@@ -68,6 +70,18 @@ impl Discovery {
     pub fn shutdown(&self) {
         if let Some(b) = self.backend.lock().unwrap().as_ref() {
             b.stop_advertising();
+        }
+    }
+
+    /// True the first time only: the caller starts the (single) announcement.
+    pub fn start_announcing(&self) -> bool {
+        !self.announcing.swap(true, Ordering::SeqCst)
+    }
+
+    /// Send this device's announcement now (its role changed), not at the next heartbeat.
+    pub fn announce_now(&self) {
+        if let Some(b) = self.backend.lock().unwrap().as_ref() {
+            b.announce_now();
         }
     }
 
@@ -122,6 +136,20 @@ pub fn load_or_create_id(dir: &Path) -> std::io::Result<String> {
     std::fs::create_dir_all(dir)?;
     std::fs::write(&path, &id)?;
     Ok(id)
+}
+
+/// Only workers accept a share of a model. A typed-in address announced no role, so it
+/// is allowed (connecting fails clearly if nothing is listening).
+pub fn check_workers(chosen: &[PeerInfo]) -> Result<(), String> {
+    for p in chosen {
+        match p.role {
+            Some(role) if role != DeviceRole::Worker => {
+                return Err(format!("{} is not a worker (it is {})", p.name, role.as_str()));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Refuse to load with any endpoint that belongs to a known, incompatible peer.
@@ -196,5 +224,17 @@ mod tests {
         d.add(peer("me", "192.168.1.2", "10.0.0"));
         d.add(peer("other", "192.168.1.4", "10.0.0"));
         assert_eq!(d.peers().iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["other"]);
+    }
+
+    #[test]
+    fn only_workers_can_be_chosen() {
+        let worker = peer("Mac", "192.168.1.2", "10.0.0");
+        let host = PeerInfo { role: Some(DeviceRole::Host), ..peer("Phone", "192.168.1.4", "10.0.0") };
+        let idle = PeerInfo { role: Some(DeviceRole::Idle), ..peer("Tablet", "192.168.1.5", "10.0.0") };
+        let manual = PeerInfo { role: None, source: PeerSource::Manual, ..peer("192.168.1.6:50052", "192.168.1.6", "10.0.0") };
+
+        assert_eq!(check_workers(&[worker.clone(), manual]), Ok(()), "a typed-in address may be a worker");
+        assert_eq!(check_workers(&[worker.clone(), host]), Err("Phone is not a worker (it is host)".into()));
+        assert_eq!(check_workers(&[idle, worker]), Err("Tablet is not a worker (it is idle)".into()));
     }
 }

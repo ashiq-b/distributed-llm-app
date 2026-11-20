@@ -79,11 +79,13 @@ typedef int (*dl_token_cb)(const char * piece, void * user);
 
 // Run a chat turn on the loaded model. roles/contents are parallel arrays
 // ("system" | "user" | "assistant"). The model's chat template is applied and the
-// KV cache is reset each call. temperature <= 0 means greedy. On return,
+// KV cache is reset each call. temperature <= 0 means greedy. think = 0 switches the
+// model's reasoning off where its template has a switch. The answer is capped at
+// max_tokens or what the context has left, whichever is smaller. On return,
 // *n_tokens (may be NULL) holds the number of tokens generated.
 // Returns DL_STOP_* (>= 0) or a DL_ERR_* (< 0).
 int dl_host_generate(const char ** roles, const char ** contents, int n_messages,
-                     int max_tokens, float temperature, unsigned int seed,
+                     int max_tokens, float temperature, unsigned int seed, int think,
                      dl_token_cb cb, void * user, int * n_tokens);
 
 // Ask a running dl_host_generate to stop after the current token. Thread-safe.

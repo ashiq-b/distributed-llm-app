@@ -13,11 +13,13 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -168,6 +170,7 @@ struct host_device {
 
 constexpr uint32_t       N_CTX   = 4096;
 constexpr uint32_t       N_BATCH = 512;
+constexpr size_t         MIN_ANSWER = 256;   // room an answer needs, in tokens
 
 std::mutex               g_host_mu;
 llama_model *            g_model = nullptr;
@@ -308,6 +311,32 @@ bool format_chat(const std::vector<llama_chat_message> & msgs, std::string & out
     return false;
 }
 
+// What the model's own template appends to the assistant turn for thinking on or off (its
+// Jinja `enable_thinking` branches). llama_chat_apply_template does not run Jinja, so we add
+// it ourselves. Empty for a model with no thinking switch.
+std::string think_prefill(bool think) {
+    const char * t = llama_model_chat_template(g_model, nullptr);
+    if (!t) return "";
+    const std::string tmpl = t;
+    struct known_t { const char * in_template, * on, * off; };
+    static const known_t known[] = {
+        {"'<think>\\n\\n</think>\\n\\n'", "<think>\n", "<think>\n\n</think>\n\n"},   // Qwen3.5
+        {"\"<think></think>\"",              "<think>",   "<think></think>"},             // LFM3
+    };
+    for (const auto & k : known) {
+        if (tmpl.find(k.in_template) != std::string::npos) return think ? k.on : k.off;
+    }
+    return "";
+}
+
+// The token `text` is, if the vocabulary has it as exactly one token.
+bool single_token(const llama_vocab * vocab, const char * text, llama_token & out) {
+    llama_token toks[2];
+    if (llama_tokenize(vocab, text, (int32_t) std::strlen(text), toks, 2, false, true) != 1) return false;
+    out = toks[0];
+    return true;
+}
+
 bool worker_lost() {
     char ep[128] = {0};
     if (!ggml_backend_rpc_get_failure(ep, sizeof(ep))) return false;
@@ -323,7 +352,7 @@ struct sampler_guard {
 } // namespace
 
 extern "C" int dl_host_generate(const char ** roles, const char ** contents, int n_messages,
-                                int max_tokens, float temperature, unsigned int seed,
+                                int max_tokens, float temperature, unsigned int seed, int think,
                                 dl_token_cb cb, void * user, int * n_tokens) {
     if (n_tokens) *n_tokens = 0;
     if (!roles || !contents || n_messages <= 0 || max_tokens <= 0) return DL_ERR_ARGS;
@@ -339,19 +368,31 @@ extern "C" int dl_host_generate(const char ** roles, const char ** contents, int
         set_last_error("cannot apply the chat template");
         return DL_ERR_ARGS;
     }
+    // With thinking on, the opening tag is part of the prompt, so stream it too: the
+    // caller then sees the reasoning as <think>… like any other.
+    const std::string prefill = think_prefill(think);
+    prompt += prefill;
 
     const llama_vocab * vocab = llama_model_get_vocab(g_model);
-    // the template already contains any BOS text, so add no special tokens; parse them instead
+    // parse the template's special tokens; add none, BOS is handled below
     int32_t n = -llama_tokenize(vocab, prompt.c_str(), (int32_t) prompt.size(), nullptr, 0, false, true);
     std::vector<llama_token> tokens(n);
     if (llama_tokenize(vocab, prompt.c_str(), (int32_t) prompt.size(), tokens.data(), n, false, true) < 0) {
         set_last_error("tokenization failed");
         return DL_ERR_ARGS;
     }
-    if (tokens.size() + (size_t) max_tokens > llama_n_ctx(g_ctx)) {
-        set_last_error("conversation is too long for the " + std::to_string(llama_n_ctx(g_ctx)) + "-token context");
+    // The model's template starts with BOS, but the built-in templates leave it out.
+    const llama_token bos = llama_vocab_bos(vocab);
+    if (llama_vocab_get_add_bos(vocab) && bos != LLAMA_TOKEN_NULL && (tokens.empty() || tokens[0] != bos)) {
+        tokens.insert(tokens.begin(), bos);
+    }
+    // The answer gets what the context has left after the conversation, up to max_tokens.
+    const size_t n_ctx = llama_n_ctx(g_ctx);
+    if (tokens.size() + MIN_ANSWER > n_ctx) {
+        set_last_error("conversation is too long for the " + std::to_string(n_ctx) + "-token context; start a new chat");
         return DL_ERR_CONTEXT;
     }
+    max_tokens = (int) std::min<size_t>((size_t) max_tokens, n_ctx - tokens.size());
 
     llama_memory_clear(llama_get_memory(g_ctx), true);
 
@@ -367,6 +408,16 @@ extern "C" int dl_host_generate(const char ** roles, const char ** contents, int
     }
 
     sampler_guard smpl{llama_sampler_chain_init(llama_sampler_chain_default_params())};
+    // Some models (LFM3) reason anyway after the template's "no thinking" prefill, so with
+    // thinking off the reasoning tags cannot be chosen at all.
+    std::vector<llama_logit_bias> bans;
+    for (const char * tag : {"<think>", "</think>"}) {
+        llama_token tok;
+        if (!think && single_token(vocab, tag, tok)) bans.push_back({tok, -INFINITY});
+    }
+    if (!bans.empty()) {
+        llama_sampler_chain_add(smpl.s, llama_sampler_init_logit_bias(llama_vocab_n_tokens(vocab), (int32_t) bans.size(), bans.data()));
+    }
     if (temperature <= 0.0f) {
         llama_sampler_chain_add(smpl.s, llama_sampler_init_greedy());
     } else {
@@ -374,6 +425,8 @@ extern "C" int dl_host_generate(const char ** roles, const char ** contents, int
         llama_sampler_chain_add(smpl.s, llama_sampler_init_temp(temperature));
         llama_sampler_chain_add(smpl.s, llama_sampler_init_dist(seed));
     }
+
+    if (think && !prefill.empty() && cb && cb(prefill.c_str(), user) != 0) return DL_STOP_CANCELLED;
 
     char piece[256];
     for (int i = 0; i < max_tokens; i++) {

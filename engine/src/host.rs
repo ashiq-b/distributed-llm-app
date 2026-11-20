@@ -76,6 +76,7 @@ impl Host {
     }
 
     /// Generate the assistant's reply to `messages`, streaming text to `on_token`.
+    /// Reasoning, when on, is streamed too, inside `<think>…</think>`.
     /// Return `ControlFlow::Break` from the callback (or call [`Host::cancel`]) to stop early.
     /// After `Err(WorkerLost)` the model is unusable: drop this `Host` and load again.
     pub fn generate(
@@ -90,7 +91,12 @@ impl Host {
         let role_ptrs: Vec<*const c_char> = roles.iter().map(|c| c.as_ptr()).collect();
         let content_ptrs: Vec<*const c_char> = contents.iter().map(|c| c.as_ptr()).collect();
 
-        let mut stream = Utf8Stream { pending: Vec::new(), on_token: &mut on_token };
+        let mut text = String::new();
+        let mut on_piece = |p: &str| {
+            text.push_str(p);
+            on_token(p)
+        };
+        let mut stream = Utf8Stream { pending: Vec::new(), on_token: &mut on_piece };
         let mut n_tokens: c_int = 0;
         let started = Instant::now();
         let rc = unsafe {
@@ -101,16 +107,19 @@ impl Host {
                 params.max_tokens.min(i32::MAX as u32) as c_int,
                 params.temperature,
                 params.seed,
+                params.think as c_int,
                 Some(token_trampoline),
                 &mut stream as *mut Utf8Stream as *mut c_void,
                 &mut n_tokens,
             )
         };
         stream.flush();
+        drop(stream);
         let summary = |stopped| GenSummary { tokens: n_tokens.max(0) as u32, millis: started.elapsed().as_millis() as u64, stopped };
         match rc {
             ffi::DL_STOP_EOS => Ok(summary(StopReason::Eos)),
             ffi::DL_STOP_CANCELLED => Ok(summary(StopReason::Cancelled)),
+            ffi::DL_STOP_MAX_TOKENS if still_thinking(&text) => Ok(summary(StopReason::MaxTokensWhileThinking)),
             ffi::DL_STOP_MAX_TOKENS => Ok(summary(StopReason::MaxTokens)),
             ffi::DL_ERR_WORKER_LOST => Err(EngineError::WorkerLost(last_error())),
             ffi::DL_ERR_CONTEXT => Err(EngineError::ContextFull(last_error())),
@@ -158,11 +167,14 @@ pub struct GenParams {
     /// 0 = greedy (deterministic).
     pub temperature: f32,
     pub seed: u32,
+    /// Let the model reason before answering. Off: it answers at once (models without
+    /// a thinking switch ignore this).
+    pub think: bool,
 }
 
 impl Default for GenParams {
     fn default() -> Self {
-        GenParams { max_tokens: 512, temperature: 0.7, seed: 0 }
+        GenParams { max_tokens: 2048, temperature: 0.7, seed: 0, think: false }
     }
 }
 
@@ -172,6 +184,8 @@ impl Default for GenParams {
 pub enum StopReason {
     Eos,
     MaxTokens,
+    /// The length ran out before the reasoning finished, so there is no answer yet.
+    MaxTokensWhileThinking,
     Cancelled,
 }
 
@@ -226,6 +240,11 @@ impl Drop for Host {
         unsafe { ffi::dl_host_unload() };
         HOST_ACTIVE.store(false, Ordering::SeqCst);
     }
+}
+
+/// The text opened a `<think>` block that it never closed.
+fn still_thinking(text: &str) -> bool {
+    text.rfind("<think>") > text.rfind("</think>")
 }
 
 fn release(err: EngineError) -> EngineError {

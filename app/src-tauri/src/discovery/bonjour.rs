@@ -29,11 +29,13 @@ pub struct Bonjour {
     registry: Arc<Mutex<PeerRegistry>>,
     browsing: AtomicBool,
     advertising: Mutex<Option<Arc<AtomicBool>>>,
+    /// Set to send the next announcement now instead of at the next heartbeat.
+    announce_now: Arc<AtomicBool>,
 }
 
 impl Bonjour {
     pub fn new(app: AppHandle, registry: Arc<Mutex<PeerRegistry>>) -> Result<Bonjour, String> {
-        Ok(Bonjour { app, registry, browsing: AtomicBool::new(false), advertising: Mutex::new(None) })
+        Ok(Bonjour { app, registry, browsing: AtomicBool::new(false), advertising: Mutex::new(None), announce_now: Arc::default() })
     }
 
     /// Start browsing (once). `on_change` gets the full list whenever it changes.
@@ -76,9 +78,15 @@ impl Bonjour {
         Ok(())
     }
 
+    /// Send the announcement now (e.g. the role changed) rather than at the next heartbeat.
+    pub fn announce_now(&self) {
+        self.announce_now.store(true, Ordering::SeqCst);
+    }
+
     /// Announce this device now and every `HEARTBEAT`. Replaces any earlier advert.
     pub fn advertise(&self, me: impl Fn() -> PeerInfo + Send + 'static) -> Result<(), String> {
         let stop = Arc::new(AtomicBool::new(false));
+        let now = self.announce_now.clone();
         if let Some(previous) = self.advertising.lock().unwrap().replace(stop.clone()) {
             previous.store(true, Ordering::SeqCst);
         }
@@ -98,7 +106,7 @@ impl Bonjour {
                         eprintln!("Bonjour announce failed: {e}");
                     }
                     let next = Instant::now() + HEARTBEAT;
-                    while Instant::now() < next && !stop.load(Ordering::SeqCst) {
+                    while Instant::now() < next && !stop.load(Ordering::SeqCst) && !now.swap(false, Ordering::SeqCst) {
                         std::thread::sleep(Duration::from_millis(200));
                     }
                 }

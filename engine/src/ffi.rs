@@ -66,6 +66,7 @@ extern "C" {
         max_tokens: c_int,
         temperature: c_float,
         seed: std::os::raw::c_uint,
+        think: c_int,
         cb: dl_token_cb,
         user: *mut c_void,
         n_tokens: *mut c_int,

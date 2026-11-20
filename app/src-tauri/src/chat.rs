@@ -48,9 +48,14 @@ impl ChatSession {
     }
 
     /// The answer is complete (or was stopped): keep it, minus the model's reasoning.
+    /// No answer at all (e.g. the length ran out while thinking) is treated like a failure.
     pub fn end_turn(&mut self, answer: &str) {
+        let answer = without_thinking(answer);
+        if answer.is_empty() {
+            return self.fail_turn();
+        }
         self.busy = false;
-        self.history.push(ChatMessage { role: ChatRole::Assistant, content: without_thinking(answer) });
+        self.history.push(ChatMessage { role: ChatRole::Assistant, content: answer });
     }
 
     /// Generation failed: forget the unanswered message so it can be sent again.
@@ -134,5 +139,18 @@ mod tests {
         assert_eq!(without_thinking("x <think>a</think> y <think>b</think>z"), "x  y z");
         assert_eq!(without_thinking("Answer <think>stopped mid-thou"), "Answer");
         assert_eq!(without_thinking("plain"), "plain");
+    }
+
+    #[test]
+    fn history_never_stores_an_empty_reply() {
+        let mut c = ChatSession::default();
+        c.model_loaded("m");
+        c.begin_turn("Who won?").unwrap();
+        // Ran out of length while still thinking: nothing to keep, and the question can be asked again.
+        c.end_turn("<think>Let me recall the 2021 season");
+        assert!(c.history().is_empty());
+        assert!(c.begin_turn("Who won?").is_ok());
+        c.end_turn("   ");
+        assert!(c.history().is_empty());
     }
 }

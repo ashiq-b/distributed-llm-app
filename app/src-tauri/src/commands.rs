@@ -13,7 +13,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::device_info::{device_info as read_device_info, DeviceInfo};
-use crate::discovery::{self, registry, DeviceRole, Discovery, PeerView};
+use crate::discovery::{self, registry, Discovery, PeerView};
 use crate::chat::ChatSession;
 use crate::models::{self, download, ModelEntry, ModelState};
 use crate::roles::{self, RoleState, Roles};
@@ -84,16 +84,18 @@ pub fn role_state(state: State<'_, EngineState>) -> RoleState {
     state.roles.lock().unwrap().state().clone()
 }
 
-/// Run a role change and tell the UI the new state (`role-changed`).
+/// Run a role change, then tell the UI (`role-changed`) and the network (re-announce).
 fn change_role<T>(app: &AppHandle, f: impl FnOnce(&mut Roles) -> T) -> T {
     let state = app.state::<EngineState>();
     let mut roles = state.roles.lock().unwrap();
     let out = f(&mut roles);
     let _ = app.emit("role-changed", roles.state().clone());
+    drop(roles);
+    app.state::<Discovery>().announce_now();
     out
 }
 
-/// Become a worker on `port` (default 50052) and announce it on the network.
+/// Become a worker on `port` (default 50052); the next announcement says so.
 /// A worker stays on until the app is closed (llama.cpp can't stop its RPC server).
 #[tauri::command]
 pub async fn become_worker(app: AppHandle, port: Option<u16>) -> Result<RoleState, String> {
@@ -110,19 +112,11 @@ pub async fn become_worker(app: AppHandle, port: Option<u16>) -> Result<RoleStat
                 .map_err(|e| e.to_string())?;
             roles.set_worker(w.status());
             *worker = Some(w);
-            // Discovery failing must not stop the worker: others can still add it by address.
-            let discovery = app.state::<Discovery>();
-            let announced = discovery.backend(&app).and_then(|b| {
-                let me = discovery.me(&read_device_info(), DeviceRole::Worker, port);
-                b.advertise(move || discovery_me_now(&me))
-            });
-            if let Err(e) = announced {
-                eprintln!("worker is not announced on the network: {e}");
-            }
         }
         let now = roles.state().clone();
         drop((worker, roles));
         let _ = app.emit("role-changed", now.clone());
+        app.state::<Discovery>().announce_now();
         update_keep_awake(&app);
         Ok(now)
     })
@@ -142,6 +136,7 @@ pub async fn become_host(app: AppHandle, model_id: String, peer_ids: Vec<String>
     for id in &peer_ids {
         chosen.push(known.iter().find(|p| &p.id == id).cloned().ok_or_else(|| format!("device no longer available: {id}"))?);
     }
+    discovery::check_workers(&chosen)?;
     let endpoints: Vec<String> = chosen.iter().map(|p| SocketAddr::new(p.addr, p.rpc_port).to_string()).collect();
     discovery::check_endpoints(&endpoints, &chosen, &local)?;
     let peers_free: Vec<Option<u64>> = chosen.iter().map(|p| p.free_mem_mb).collect();
@@ -195,15 +190,16 @@ pub async fn leave_role(app: AppHandle) -> Result<RoleState, String> {
     .await
 }
 
-/// Send a message in the current conversation. The answer streams as `token` events.
+/// Send a message in the current conversation. The answer streams as `token` events,
+/// reasoning included (inside `<think>…</think>`) when `think` is on.
 #[tauri::command]
-pub async fn chat_send(app: AppHandle, text: String) -> Result<GenSummary, String> {
+pub async fn chat_send(app: AppHandle, text: String, think: bool) -> Result<GenSummary, String> {
     let state = app.state::<EngineState>();
     let host = state.host.lock().unwrap().clone().ok_or("no model loaded")?;
     let messages = state.chat.lock().unwrap().begin_turn(&text)?;
     blocking(move || {
         let mut answer = String::new();
-        let result = host.generate(&messages, GenParams::default(), |piece| {
+        let result = host.generate(&messages, GenParams { think, ..GenParams::default() }, |piece| {
             answer.push_str(piece);
             let _ = app.emit("token", Token { piece: piece.to_string() });
             std::ops::ControlFlow::Continue(())
@@ -261,9 +257,10 @@ fn update_keep_awake(app: &AppHandle) {
 
 // ---- Discovery ---------------------------------------------------------------
 
-/// Refresh the announced values that change (free memory) on each heartbeat.
-fn discovery_me_now(me: &discovery::PeerInfo) -> discovery::PeerInfo {
-    discovery::PeerInfo { free_mem_mb: read_device_info().free_mem_mb, ..me.clone() }
+/// What this device announces, read fresh on each heartbeat (role, free memory).
+fn announcement(app: &AppHandle) -> discovery::PeerInfo {
+    let (role, port) = app.state::<EngineState>().roles.lock().unwrap().announced();
+    app.state::<Discovery>().me(&read_device_info(), role, port.unwrap_or(registry::DEFAULT_RPC_PORT))
 }
 
 fn emit_peers(app: &AppHandle, peers: Vec<discovery::PeerInfo>) {
@@ -271,14 +268,20 @@ fn emit_peers(app: &AppHandle, peers: Vec<discovery::PeerInfo>) {
     let _ = app.emit("peers-changed", PeersChanged { peers });
 }
 
-/// Start looking for other devices (once). Emits `peers-changed` whenever the list changes.
+/// Start looking for other devices and announcing this one, whatever its role (once).
+/// Emits `peers-changed` whenever the list changes.
 /// Async: on iOS the plugin call needs the main thread free.
 #[tauri::command]
 pub async fn discovery_start(app: AppHandle) -> Result<Vec<PeerView>, String> {
     blocking(move || {
         let discovery = app.state::<Discovery>();
+        let backend = discovery.backend(&app)?;
         let emitter = app.clone();
-        discovery.backend(&app)?.browse(move |peers| emit_peers(&emitter, peers))?;
+        backend.browse(move |peers| emit_peers(&emitter, peers))?;
+        if discovery.start_announcing() {
+            let me = app.clone();
+            backend.advertise(move || announcement(&me))?;
+        }
         Ok(discovery::views(discovery.peers(), &read_device_info()))
     })
     .await

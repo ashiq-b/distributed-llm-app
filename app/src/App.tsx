@@ -24,6 +24,7 @@ export default function App() {
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [reply, setReply] = useState("");
   const [summary, setSummary] = useState<GenSummary | null>(null);
+  const [think, setThink] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -117,7 +118,7 @@ export default function App() {
             {p.free_mem_mb ?? "unknown"} MiB · {p.compat}{" "}
             <label>
               <input type="checkbox" checked={chosen.includes(p.id)}
-                disabled={p.compat === "proto_mismatch" || p.compat === "app_version_mismatch"}
+                disabled={p.compat === "proto_mismatch" || p.compat === "app_version_mismatch" || (p.role !== null && p.role !== "worker")}
                 onChange={(e) => setChosen((c) => e.target.checked ? [...c, p.id] : c.filter((id) => id !== p.id))} />
               use as worker
             </label>
@@ -173,17 +174,23 @@ export default function App() {
         setReply("");
         setSummary(null);
         try {
-          setSummary(await chatSend(text));
-          setReply("");
+          const s = await chatSend(text, think);
+          setSummary(s);
+          // Ran out of length mid-thought: keep the reasoning on screen, it's all there is.
+          if (s.stopped !== "max_tokens_while_thinking") setReply("");
         } finally {
           setHistory(await chatHistory());
         }
       })}>Send</button>{" "}
+      <label><input type="checkbox" checked={think} onChange={(e) => setThink(e.target.checked)} /> Think first</label>{" "}
       <button onClick={() => chatStop()}>Stop</button>{" "}
       <button disabled={busy} onClick={() => run(async () => {
         await chatReset(); setHistory([]); setReply(""); setSummary(null);
       })}>New chat</button>
       {reply && <pre style={{ whiteSpace: "pre-wrap" }}>{reply}</pre>}
+      {summary?.stopped === "max_tokens_while_thinking" && (
+        <p style={{ color: "crimson" }}>Ran out of length while thinking, so there is no answer. Ask again, or turn off "Think first".</p>
+      )}
       {summary && <p>{summary.tokens} tokens in {(summary.millis / 1000).toFixed(1)} s · stopped: {summary.stopped}</p>}
 
       {error && <p style={{ color: "crimson" }}>Error: {error}</p>}

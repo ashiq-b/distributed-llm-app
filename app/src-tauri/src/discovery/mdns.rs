@@ -32,6 +32,8 @@ pub struct Mdns {
     registry: Arc<Mutex<PeerRegistry>>,
     browsing: AtomicBool,
     advertising: Mutex<Option<Arc<AtomicBool>>>,
+    /// Set to send the next announcement now instead of at the next heartbeat.
+    announce_now: Arc<AtomicBool>,
     /// Full name of the service being announced, once registered.
     advertised: Arc<Mutex<Option<String>>>,
 }
@@ -44,6 +46,7 @@ impl Mdns {
             registry,
             browsing: AtomicBool::new(false),
             advertising: Mutex::new(None),
+            announce_now: Arc::default(),
             advertised: Arc::default(),
         })
     }
@@ -93,10 +96,16 @@ impl Mdns {
         }
     }
 
+    /// Send the announcement now (e.g. the role changed) rather than at the next heartbeat.
+    pub fn announce_now(&self) {
+        self.announce_now.store(true, Ordering::SeqCst);
+    }
+
     /// Announce this device now and every `HEARTBEAT`. `me` is called each time, so the
     /// record carries current values (free memory, role). Replaces any earlier advert.
     pub fn advertise(&self, me: impl Fn() -> PeerInfo + Send + 'static) -> Result<(), String> {
         let stop = Arc::new(AtomicBool::new(false));
+        let now = self.announce_now.clone();
         if let Some(previous) = self.advertising.lock().unwrap().replace(stop.clone()) {
             previous.store(true, Ordering::SeqCst);
         }
@@ -125,7 +134,7 @@ impl Mdns {
                         Err(e) => eprintln!("mDNS record invalid: {e}"),
                     }
                     let next = Instant::now() + HEARTBEAT;
-                    while Instant::now() < next && !stop.load(Ordering::SeqCst) {
+                    while Instant::now() < next && !stop.load(Ordering::SeqCst) && !now.swap(false, Ordering::SeqCst) {
                         std::thread::sleep(Duration::from_millis(200));
                     }
                 }
@@ -231,4 +240,29 @@ mod tests {
         assert!(later > first, "last_seen was not refreshed by the heartbeat");
     }
 
+    #[test]
+    fn idle_and_host_devices_are_advertised() {
+        // Every device announces itself with its current role; a role change goes out
+        // at once, not at the next heartbeat.
+        let id = format!("role-{}", std::process::id());
+        let registry: Arc<Mutex<PeerRegistry>> = Arc::default();
+        let mdns = Mdns::new(registry.clone()).unwrap();
+        let role = Arc::new(Mutex::new(DeviceRole::Idle));
+        let (me, now) = (peer(&id, "127.0.0.1"), role.clone());
+        mdns.advertise(move || PeerInfo { role: Some(*now.lock().unwrap()), ..me.clone() }).unwrap();
+        mdns.browse(|_| {}).unwrap();
+
+        let role_of = || registry.lock().unwrap().list().into_iter().find(|p| p.id == id).and_then(|p| p.role);
+        let wait_for = |want: DeviceRole, within: Duration| {
+            let t = Instant::now();
+            while role_of() != Some(want) {
+                assert!(t.elapsed() < within, "not announced as {want:?} within {within:?} (have {:?})", role_of());
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        };
+        wait_for(DeviceRole::Idle, Duration::from_secs(5));
+        *role.lock().unwrap() = DeviceRole::Host;
+        mdns.announce_now();
+        wait_for(DeviceRole::Host, Duration::from_secs(2));
+    }
 }

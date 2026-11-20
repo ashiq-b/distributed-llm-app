@@ -33,7 +33,7 @@ export interface ChatMessage {
   content: string;
 }
 
-export type StopReason = "eos" | "max_tokens" | "cancelled";
+export type StopReason = "eos" | "max_tokens" | "max_tokens_while_thinking" | "cancelled";
 export interface GenSummary {
   tokens: number;
   millis: number;
@@ -59,7 +59,8 @@ export const onRoleChanged = (cb: (s: RoleState) => void): Promise<UnlistenFn> =
   listen<RoleState>("role-changed", (e) => cb(e.payload));
 
 /** Sends one message in the current conversation; the answer streams as `token` events. */
-export const chatSend = (text: string) => invoke<GenSummary>("chat_send", { text });
+/** The answer streams as `token` events; with `think`, its reasoning comes first inside <think>…</think>. */
+export const chatSend = (text: string, think: boolean) => invoke<GenSummary>("chat_send", { text, think });
 export const chatStop = () => invoke<void>("chat_stop");
 export const chatHistory = () => invoke<ChatMessage[]>("chat_history");
 export const chatReset = () => invoke<void>("chat_reset");

@@ -8,6 +8,8 @@
 use dl_engine::{DeviceShare, WorkerStatus};
 use serde::Serialize;
 
+use crate::discovery::DeviceRole;
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum RoleState {
@@ -33,6 +35,18 @@ impl Default for Roles {
 impl Roles {
     pub fn state(&self) -> &RoleState {
         &self.state
+    }
+
+    /// The role this device announces, and its RPC port if it is a worker.
+    pub fn announced(&self) -> (DeviceRole, Option<u16>) {
+        match &self.state {
+            RoleState::Idle => (DeviceRole::Idle, None),
+            RoleState::Loading { .. } | RoleState::Host { .. } => (DeviceRole::Host, None),
+            RoleState::Worker { status } => {
+                let port = status.endpoint.rsplit_once(':').and_then(|(_, p)| p.parse().ok());
+                (DeviceRole::Worker, port)
+            }
+        }
     }
 
     /// May this device start a worker now? Already being one is fine.
@@ -185,5 +199,18 @@ mod tests {
         assert_eq!(memory_guard(1300, None, &[]), Err("not enough memory: need 1300 MB, have 0 MB".into()));
         assert_eq!(memory_guard(1300, Some(1000), &[None]), Err("not enough memory: need 1300 MB, have 1000 MB".into()));
         assert_eq!(memory_guard(1300, Some(1000), &[None, Some(300)]), Ok(()));
+    }
+
+    #[test]
+    fn every_role_is_announced() {
+        let mut r = Roles::default();
+        assert_eq!(r.announced(), (DeviceRole::Idle, None));
+        r.begin_loading("m").unwrap();
+        assert_eq!(r.announced(), (DeviceRole::Host, None));
+        r.finish_loading(Ok(vec![share()]));
+        assert_eq!(r.announced(), (DeviceRole::Host, None));
+        r.leave().unwrap();
+        r.set_worker(WorkerStatus { endpoint: "0.0.0.0:6000".into(), ..status() });
+        assert_eq!(r.announced(), (DeviceRole::Worker, Some(6000)));
     }
 }

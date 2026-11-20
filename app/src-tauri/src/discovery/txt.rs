@@ -17,7 +17,7 @@ pub enum DeviceRole {
 }
 
 impl DeviceRole {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             DeviceRole::Idle => "idle",
             DeviceRole::Worker => "worker",
