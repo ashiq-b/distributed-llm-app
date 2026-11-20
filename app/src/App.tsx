@@ -10,6 +10,7 @@ import {
 } from "./lib/tauri";
 
 const mb = (bytes: number) => `${(bytes / 1e6).toFixed(0)} MB`;
+const mib = (bytes: number) => `${(bytes / 1048576).toFixed(1)} MiB`;
 
 export default function App() {
   const [info, setInfo] = useState<DeviceInfo | null>(null);
@@ -146,6 +147,12 @@ export default function App() {
         Unload
       </button>
       {role.role === "loading" && <p>Loading {role.model_id}: {Math.round(role.frac * 100)}%</p>}
+      {role.role === "host" && (
+        <p>
+          Loaded in {(role.load.millis / 1000).toFixed(1)} s · sent to workers {mib(role.load.bytes_sent)} ·
+          already on workers {mib(role.load.bytes_cached)}
+        </p>
+      )}
       {shares.length > 0 && (
         <table cellPadding={4}>
           <thead><tr><th align="left">Device</th><th>Where</th><th>Layers</th><th align="right">MiB</th></tr></thead>

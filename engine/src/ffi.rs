@@ -44,6 +44,8 @@ pub struct dl_worker_status_t {
 extern "C" {
     pub fn dl_worker_start(bind_host: *const c_char, port: c_int, cache_dir: *const c_char, n_threads: c_int) -> c_int;
     pub fn dl_worker_status(out: *mut dl_worker_status_t) -> c_int;
+    pub fn dl_worker_add_model(gguf_path: *const c_char, index_dir: *const c_char) -> c_int;
+    pub fn dl_worker_bytes_from_models() -> u64;
     pub fn dl_rpc_proto_version() -> *const c_char;
     pub fn dl_device_free_mb() -> c_longlong;
 
@@ -72,4 +74,5 @@ extern "C" {
         n_tokens: *mut c_int,
     ) -> c_int;
     pub fn dl_host_cancel();
+    pub fn dl_host_upload_stats(sent: *mut u64, cached: *mut u64);
 }

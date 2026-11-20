@@ -47,7 +47,14 @@ export type RoleState =
   | { role: "idle" }
   | { role: "worker"; status: WorkerStatus }
   | { role: "loading"; model_id: string; frac: number }
-  | { role: "host"; model_id: string; shares: DeviceShare[] };
+  | { role: "host"; model_id: string; shares: DeviceShare[]; load: LoadReport };
+
+/** How a load went. `bytes_cached`: weights the workers already had, so only a hash was sent. */
+export interface LoadReport {
+  millis: number;
+  bytes_sent: number;
+  bytes_cached: number;
+}
 
 export const roleState = () => invoke<RoleState>("role_state");
 export const becomeWorker = (port?: number) => invoke<RoleState>("become_worker", { port });

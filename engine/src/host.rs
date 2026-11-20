@@ -19,7 +19,18 @@ static HOST_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// One per process; dropping it unloads the model.
 #[derive(Debug)]
 pub struct Host {
-    _private: (),
+    report: LoadReport,
+}
+
+/// How a load went: its duration and how the RPC workers got their weights.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct LoadReport {
+    pub millis: u64,
+    /// Weight bytes sent to workers over the network.
+    pub bytes_sent: u64,
+    /// Weight bytes the workers already had (cache or their own model file); only a hash was sent.
+    pub bytes_cached: u64,
 }
 
 impl Host {
@@ -52,6 +63,7 @@ impl Host {
         };
         let ep_ptrs: Vec<*const i8> = eps.iter().map(|c| c.as_ptr()).collect();
 
+        let started = Instant::now();
         let mut progress: &mut dyn FnMut(f32) = &mut on_progress;
         let rc = unsafe {
             ffi::dl_host_load(
@@ -64,10 +76,19 @@ impl Host {
             )
         };
         match rc {
-            ffi::DL_OK => Ok(Host { _private: () }),
+            ffi::DL_OK => {
+                let (mut sent, mut cached) = (0u64, 0u64);
+                unsafe { ffi::dl_host_upload_stats(&mut sent, &mut cached) };
+                let millis = started.elapsed().as_millis() as u64;
+                Ok(Host { report: LoadReport { millis, bytes_sent: sent, bytes_cached: cached } })
+            }
             ffi::DL_ERR_OOM => Err(release(EngineError::OutOfMemory)),
             _ => Err(release(EngineError::Load(last_error()))),
         }
+    }
+
+    pub fn load_report(&self) -> LoadReport {
+        self.report
     }
 
     /// Each device's share of the model, in load order (RPC workers first, this device last).

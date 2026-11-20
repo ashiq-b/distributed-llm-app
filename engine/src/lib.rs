@@ -8,7 +8,7 @@ mod worker;
 
 use std::ffi::CStr;
 
-pub use host::{ChatMessage, ChatRole, GenParams, GenSummary, Host, StopReason, CONNECT_TIMEOUT};
+pub use host::{ChatMessage, ChatRole, GenParams, GenSummary, Host, LoadReport, StopReason, CONNECT_TIMEOUT};
 pub use stats::DeviceShare;
 pub use worker::{Worker, WorkerConfig, WorkerStatus};
 

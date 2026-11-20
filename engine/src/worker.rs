@@ -1,5 +1,5 @@
 use std::ffi::{CStr, CString};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr;
 
 use crate::{ffi, EngineError};
@@ -61,6 +61,23 @@ impl Worker {
             ffi::DL_ERR_START => Err(EngineError::Start(format!("RPC server failed to start on {endpoint}"))),
             other => Err(EngineError::Start(format!("unexpected engine error {other} starting {endpoint}"))),
         }
+    }
+
+    /// Serve weights from `model`, a GGUF file this device already has: a host loading the
+    /// same model then sends only hashes for them, not the data. Indexes the file once
+    /// (the index is kept in `index_dir`); later calls return at once. Returns the number
+    /// of tensors indexed. Takes a few seconds per GB the first time. Works before or after
+    /// the worker starts.
+    pub fn add_model(model: &Path, index_dir: &Path) -> Result<usize, EngineError> {
+        let c = |p: &Path| CString::new(p.to_string_lossy().as_bytes()).map_err(|_| EngineError::Start("path contains NUL".into()));
+        std::fs::create_dir_all(index_dir).map_err(|e| EngineError::Start(format!("index dir {}: {e}", index_dir.display())))?;
+        let rc = unsafe { ffi::dl_worker_add_model(c(model)?.as_ptr(), c(index_dir)?.as_ptr()) };
+        usize::try_from(rc).map_err(|_| EngineError::Start(format!("cannot index {}", model.display())))
+    }
+
+    /// Weight bytes this worker has taken from its own model files instead of the network.
+    pub fn bytes_from_models() -> u64 {
+        unsafe { ffi::dl_worker_bytes_from_models() }
     }
 
     pub fn status(&self) -> WorkerStatus {

@@ -112,6 +112,7 @@ pub async fn become_worker(app: AppHandle, port: Option<u16>) -> Result<RoleStat
                 .map_err(|e| e.to_string())?;
             roles.set_worker(w.status());
             *worker = Some(w);
+            index_local_models(&app);
         }
         let now = roles.state().clone();
         drop((worker, roles));
@@ -160,9 +161,10 @@ pub async fn become_host(app: AppHandle, model_id: String, peer_ids: Vec<String>
         match loaded {
             Ok(host) => {
                 let shares = host.device_shares();
+                let load = host.load_report();
                 *state.host.lock().unwrap() = Some(Arc::new(host));
                 state.chat.lock().unwrap().model_loaded(&model_id);
-                change_role(&app, |r| r.finish_loading(Ok(shares.clone())));
+                change_role(&app, |r| r.finish_loading(Ok((shares.clone(), load))));
                 update_keep_awake(&app);
                 Ok(shares)
             }
@@ -241,6 +243,30 @@ pub fn chat_history(state: State<'_, EngineState>) -> Vec<ChatMessage> {
 #[tauri::command]
 pub fn chat_reset(state: State<'_, EngineState>) -> Result<(), String> {
     state.chat.lock().unwrap().reset()
+}
+
+/// Let this worker serve weights from the models this device has downloaded, so a host
+/// loading one of them sends only hashes (see `Worker::add_model`). Runs in the background:
+/// the worker is usable meanwhile, and a model already indexed is skipped at once.
+/// `DL_WORKER_NO_MODEL_FILES=1` turns this off, to measure a load that sends everything.
+fn index_local_models(app: &AppHandle) {
+    if std::env::var_os("DL_WORKER_NO_MODEL_FILES").is_some() {
+        eprintln!("worker: not serving from its own model files (DL_WORKER_NO_MODEL_FILES)");
+        return;
+    }
+    let (Ok(dir), Ok(cache)) = (models_dir(app), app.path().app_cache_dir()) else { return };
+    let index_dir = cache.join("model-index");
+    std::thread::spawn(move || {
+        for m in models::catalog() {
+            if let ModelState::Ready { path } = models::model_state(&dir, m) {
+                let started = Instant::now();
+                match Worker::add_model(&path, &index_dir) {
+                    Ok(n) => eprintln!("worker: {} ready to serve from its own file ({n} tensors, {} ms)", m.id, started.elapsed().as_millis()),
+                    Err(e) => eprintln!("worker: {} not indexed: {e}", m.id),
+                }
+            }
+        }
+    });
 }
 
 /// Keep the screen on while this device is a worker or has a model loaded: a locked
@@ -351,6 +377,9 @@ pub async fn model_download(app: AppHandle, id: String) -> Result<ModelState, St
         });
         app.state::<DownloadState>().active.lock().unwrap().remove(&m.id);
         result.map_err(|e| e.to_string())?;
+        if app.state::<EngineState>().worker.lock().unwrap().is_some() {
+            index_local_models(&app);
+        }
         Ok(download::file_state(&dest))
     })
     .await

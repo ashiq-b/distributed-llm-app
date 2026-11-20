@@ -5,7 +5,7 @@
 //! A worker can't be stopped (llama.cpp's RPC server has no stop call; Task 1.1), so a
 //! device that became a worker stays one until the app is closed.
 
-use dl_engine::{DeviceShare, WorkerStatus};
+use dl_engine::{DeviceShare, LoadReport, WorkerStatus};
 use serde::Serialize;
 
 use crate::discovery::DeviceRole;
@@ -16,7 +16,7 @@ pub enum RoleState {
     Idle,
     Worker { status: WorkerStatus },
     Loading { model_id: String, frac: f32 },
-    Host { model_id: String, shares: Vec<DeviceShare> },
+    Host { model_id: String, shares: Vec<DeviceShare>, load: LoadReport },
 }
 
 pub const WORKER_STAYS: &str = "this device is a worker until the app is closed; reopen the app to change role";
@@ -86,10 +86,10 @@ impl Roles {
     }
 
     /// Loading ends: Host on success, Idle on failure.
-    pub fn finish_loading(&mut self, result: Result<Vec<DeviceShare>, ()>) {
+    pub fn finish_loading(&mut self, result: Result<(Vec<DeviceShare>, LoadReport), ()>) {
         let RoleState::Loading { model_id, .. } = &self.state else { return };
         self.state = match result {
-            Ok(shares) => RoleState::Host { model_id: model_id.clone(), shares },
+            Ok((shares, load)) => RoleState::Host { model_id: model_id.clone(), shares, load },
             Err(()) => RoleState::Idle,
         };
     }
@@ -133,6 +133,10 @@ mod tests {
         WorkerStatus { running: true, endpoint: "0.0.0.0:50052".into(), device: "Apple M5".into(), free_mb: Some(12000) }
     }
 
+    fn report() -> LoadReport {
+        LoadReport { millis: 3200, bytes_sent: 8 << 20, bytes_cached: 442 << 20 }
+    }
+
     fn share() -> DeviceShare {
         DeviceShare { name: "Apple M5".into(), endpoint: None, is_remote: false, layers: Some((0, 24)), buffer_mib: Some(794.5) }
     }
@@ -156,8 +160,8 @@ mod tests {
         r.begin_loading("lfm3-1.7b").unwrap();
         assert!(r.set_progress(0.5));
         assert!(!r.set_progress(0.505), "less than 1% is not worth an event");
-        r.finish_loading(Ok(vec![share()]));
-        assert_eq!(*r.state(), RoleState::Host { model_id: "lfm3-1.7b".into(), shares: vec![share()] });
+        r.finish_loading(Ok((vec![share()], report())));
+        assert_eq!(*r.state(), RoleState::Host { model_id: "lfm3-1.7b".into(), shares: vec![share()], load: report() });
         assert!(r.can_become_worker().is_err(), "unload the model before becoming a worker");
         // Host → Loading another model is allowed (the old one is unloaded).
         r.begin_loading("qwen3.5-2b").unwrap();
@@ -165,11 +169,11 @@ mod tests {
         assert_eq!(*r.state(), RoleState::Idle, "a failed load ends Idle");
 
         r.begin_loading("lfm3-1.7b").unwrap();
-        r.finish_loading(Ok(vec![share()]));
+        r.finish_loading(Ok((vec![share()], report())));
         r.host_lost();
         assert_eq!(*r.state(), RoleState::Idle);
         r.begin_loading("lfm3-1.7b").unwrap();
-        r.finish_loading(Ok(vec![share()]));
+        r.finish_loading(Ok((vec![share()], report())));
         assert_eq!(r.leave(), Ok(()));
         assert_eq!(*r.state(), RoleState::Idle);
     }
@@ -207,7 +211,7 @@ mod tests {
         assert_eq!(r.announced(), (DeviceRole::Idle, None));
         r.begin_loading("m").unwrap();
         assert_eq!(r.announced(), (DeviceRole::Host, None));
-        r.finish_loading(Ok(vec![share()]));
+        r.finish_loading(Ok((vec![share()], report())));
         assert_eq!(r.announced(), (DeviceRole::Host, None));
         r.leave().unwrap();
         r.set_worker(WorkerStatus { endpoint: "0.0.0.0:6000".into(), ..status() });

@@ -26,6 +26,6 @@ endif()
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../llama.cpp llama.cpp)
 
-add_library(dl_engine STATIC dl_engine.cpp dl_stats.cpp)
+add_library(dl_engine STATIC dl_engine.cpp dl_model_cache.cpp dl_stats.cpp)
 target_include_directories(dl_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(dl_engine PRIVATE llama ggml ggml-rpc)

@@ -41,6 +41,16 @@ int dl_worker_start(const char * bind_host, int port, const char * cache_dir, in
 // Fill *out with the worker's current status. Returns DL_OK, or DL_ERR_ARGS.
 int dl_worker_status(dl_worker_status_t * out);
 
+// Let the worker serve weights from a GGUF file this device already has: a host loading
+// the same model then sends only hashes for them. The file is indexed once (an index is
+// kept in index_dir and rebuilt if the file changes) and stays mapped until the process
+// exits. Safe to call before or while the worker runs, from any thread.
+// Returns the number of tensors indexed, or DL_ERR_ARGS / DL_ERR_LOAD.
+int dl_worker_add_model(const char * gguf_path, const char * index_dir);
+
+// Weight bytes this worker has taken from its own model files instead of the network.
+unsigned long long dl_worker_bytes_from_models(void);
+
 // RPC protocol version of the linked llama.cpp, e.g. "10.0.0". Static string.
 const char * dl_rpc_proto_version(void);
 
@@ -87,6 +97,10 @@ typedef int (*dl_token_cb)(const char * piece, void * user);
 int dl_host_generate(const char ** roles, const char ** contents, int n_messages,
                      int max_tokens, float temperature, unsigned int seed, int think,
                      dl_token_cb cb, void * user, int * n_tokens);
+
+// Weight bytes the last dl_host_load sent to RPC workers, and weight bytes the workers
+// already had (sent as a hash only). Either pointer may be NULL.
+void dl_host_upload_stats(unsigned long long * sent, unsigned long long * cached);
 
 // Ask a running dl_host_generate to stop after the current token. Thread-safe.
 void dl_host_cancel(void);

@@ -22,6 +22,8 @@
 #include <utility>
 #include <vector>
 
+extern "C" void dl_model_cache_install(void);
+
 namespace {
 
 enum worker_state : int { IDLE = 0, STARTING = 1, RUNNING = 2, EXITED = 3 };
@@ -115,6 +117,7 @@ extern "C" int dl_worker_start(const char * bind_host, int port, const char * ca
         g_device   = ggml_backend_dev_description(devs[0]);
     }
 
+    dl_model_cache_install();   // dl_model_cache.cpp
     std::thread([endpoint, cache, threads, devs]() mutable {
         ggml_backend_rpc_start_server(endpoint.c_str(), cache.empty() ? nullptr : cache.c_str(),
                                       threads, devs.size(), devs.data());
@@ -267,6 +270,7 @@ extern "C" int dl_host_load(const char * model_path, const char ** endpoints, in
 
     dl_stats::reset();
     ggml_backend_rpc_clear_failure();
+    ggml_backend_rpc_reset_upload_stats();
     llama_model * model = llama_model_load_from_file(model_path, params);
     if (!model) {
         std::lock_guard<std::mutex> e(g_mu);
@@ -449,6 +453,13 @@ extern "C" int dl_host_generate(const char ** roles, const char ** contents, int
         }
     }
     return DL_STOP_MAX_TOKENS;
+}
+
+extern "C" void dl_host_upload_stats(unsigned long long * sent, unsigned long long * cached) {
+    uint64_t s = 0, c = 0;
+    ggml_backend_rpc_get_upload_stats(&s, &c);
+    if (sent)   *sent   = s;
+    if (cached) *cached = c;
 }
 
 extern "C" void dl_host_cancel(void) {
