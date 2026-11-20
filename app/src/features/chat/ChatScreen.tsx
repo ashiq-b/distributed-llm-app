@@ -2,7 +2,7 @@
 // (Task 4.4 adds the remaining chat states.)
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Power, SquarePen, Square } from "lucide-react";
+import { ArrowUp, ChevronUp, Power, SquarePen, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -12,7 +12,9 @@ import { LayerBar } from "@/features/split/LayerBands";
 import LiveStats from "@/features/split/LiveStats";
 import SplitPanel from "@/features/split/SplitPanel";
 import { becomeHost, chatHistory, chatReset, chatSend, chatStop, leaveRole, type DeviceShare } from "@/lib/tauri";
-import { chosenPeers, useChat, useModels, useNav, useNotice, usePeers, useRole } from "@/lib/stores";
+import { chosenPeers, useChat, useLayout, useModels, useNav, useNotice, usePeers, useRole } from "@/lib/stores";
+import { toneOf } from "@/features/split/LayerBands";
+import { withPeerNames } from "@/features/split/names";
 import { fileSize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useIsDesktop } from "@/app/useMediaQuery";
@@ -70,17 +72,46 @@ function LoadPanel() {
   );
 }
 
-function SplitSheet({ shares }: { shares: DeviceShare[] }) {
+/** Phone: the split, folded into a card that opens a sheet. Until the sheet has been
+ * opened once, the card says plainly that it opens and what's inside. */
+function SplitSheet({ shares: raw }: { shares: DeviceShare[] }) {
+  const peers = usePeers((s) => s.peers);
+  const { seenSplit, sawSplit } = useLayout();
+  const shares = withPeerNames(raw, peers);
   return (
-    <Sheet>
+    <Sheet onOpenChange={(open) => open && sawSplit()}>
       <SheetTrigger asChild>
-        <button className="w-full rounded-2xl border bg-surface p-3.5 text-left" aria-label="Show how the model is split">
-          <LayerBar shares={shares} />
-          <span className="mt-2.5 flex justify-between gap-3 text-sm">
-            <span className="truncate text-muted-foreground">
-              {shares.filter((s) => s.is_remote).map((s) => s.name).join(", ") || "This device only"}
+        <button
+          className={cn(
+            "group relative w-full touch-manipulation rounded-2xl border bg-surface p-3.5 text-left transition-transform active:scale-[0.99]",
+            !seenSplit && "border-signal/50 shadow-[0_0_0_4px_hsl(var(--signal)/0.10)]",
+          )}
+          aria-label="How it's split: open the live view of which device holds which layers"
+        >
+          <span className="mb-2.5 flex items-center justify-between gap-3">
+            <span className="flex min-w-0 items-center gap-2 text-sm font-semibold">
+              {!seenSplit && (
+                <span aria-hidden className="relative flex size-2 shrink-0">
+                  <span className="absolute inset-0 rounded-full bg-signal motion-safe:animate-ping" />
+                  <span className="relative size-2 rounded-full bg-signal" />
+                </span>
+              )}
+              <span className="truncate">How it's split</span>
             </span>
-            <span className="shrink-0 font-semibold text-signal">How it's split</span>
+            <span className="flex shrink-0 items-center gap-1 text-sm font-semibold text-signal">
+              {seenSplit ? "Open" : "Tap to see it live"}
+              <ChevronUp aria-hidden className="size-4 transition-transform group-active:-translate-y-0.5" />
+            </span>
+          </span>
+          <LayerBar shares={shares} />
+          <span className="num mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            {shares.map((s, i) => (
+              <span key={i} className="flex min-w-0 items-center gap-1.5">
+                <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", toneOf(shares, i))} />
+                <span className={cn("truncate", !s.is_remote && "text-signal")}>{s.is_remote ? s.name : "This device"}</span>
+                {s.layers && <span>{s.layers[0]}–{s.layers[1]}</span>}
+              </span>
+            ))}
           </span>
         </button>
       </SheetTrigger>

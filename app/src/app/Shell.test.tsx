@@ -1,6 +1,6 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { setWidth } from "@/test/setup";
-import { useRole } from "@/lib/stores";
+import { useLayout, useRole } from "@/lib/stores";
 import Crashed from "./Crashed";
 import Shell from "./Shell";
 
@@ -46,4 +46,23 @@ test("a screen that throws shows the error and a reload, not a blank window", ()
   render(<Crashed><Boom /></Crashed>);
   expect(screen.getByRole("alert")).toHaveTextContent("boom");
   expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
+});
+
+test("desktop: the sidebar and the split dock can be hidden and shown again", () => {
+  setWidth(1280);
+  useLayout.setState({ nav: true, split: true });
+  useRole.setState({ role: { role: "loading", model_id: "lfm3-1.7b", frac: 0.4 } });
+  render(<Shell />);
+  expect(screen.getByRole("navigation", { name: "Sidebar" })).toHaveTextContent("Devices");
+
+  fireEvent.click(screen.getByRole("button", { name: "Hide sidebar" }));
+  // Collapsed to icons: still a way to every screen, by name.
+  expect(screen.getByRole("button", { name: "Devices" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Show sidebar" }));
+  expect(screen.getByRole("navigation", { name: "Sidebar" })).toHaveTextContent("Devices");
+
+  fireEvent.click(screen.getByRole("button", { name: "Hide how it's split" }));
+  expect(screen.queryByRole("complementary", { name: "Split" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Show how it's split" }));
+  expect(screen.getByRole("complementary", { name: "Split" })).toHaveTextContent("40%");
 });

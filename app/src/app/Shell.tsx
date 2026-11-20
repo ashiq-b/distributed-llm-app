@@ -1,9 +1,10 @@
 // The frame around every screen: bottom tabs on a phone, a sidebar on desktop (≥ 900 px)
 // with the split view docked on the right while a model is loading or loaded.
-import { useEffect, useRef, useState } from "react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import SplitPanel from "@/features/split/SplitPanel";
-import { useDevice, useNav, useRole } from "@/lib/stores";
+import { useDevice, useLayout, useNav, useRole } from "@/lib/stores";
 import { freeMib } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import Notice from "./Notice";
@@ -21,6 +22,8 @@ export default function Shell() {
   const role = useRole((s) => s.role?.role);
   const split = role === "host" || role === "loading";
   const typing = useTyping();
+  const layout = useLayout();
+  const dock = split && layout.split;
 
   // A new screen starts at its top.
   useEffect(() => { main.current?.scrollTo?.({ top: 0 }); }, [current]);
@@ -34,42 +37,94 @@ export default function Shell() {
 
   if (desktop) {
     return (
-      <TooltipProvider>
-        <div className={cn("grid h-full",
-          split ? "grid-cols-[15rem_minmax(0,1fr)_21rem] wide:grid-cols-[16rem_minmax(0,1fr)_24rem]" : "grid-cols-[15rem_minmax(0,1fr)] wide:grid-cols-[16rem_minmax(0,1fr)]")}>
-          <nav aria-label="Sidebar" className="flex min-h-0 flex-col border-r px-3.5 pb-5 pt-7">
-            <div className="px-3 pb-8"><Wordmark /></div>
-            <ul className="space-y-1">
-              {routes.map((r) => (
-                <li key={r.id}>
+      <TooltipProvider delayDuration={300}>
+        <div
+          data-nav={layout.nav ? "open" : "closed"}
+          data-dock={dock ? "open" : "closed"}
+          className={cn(
+            "grid h-full transition-[grid-template-columns] duration-300 ease-out motion-reduce:transition-none",
+            layout.nav && dock && "grid-cols-[15rem_minmax(0,1fr)_21rem] wide:grid-cols-[16rem_minmax(0,1fr)_24rem]",
+            layout.nav && !dock && "grid-cols-[15rem_minmax(0,1fr)_0rem] wide:grid-cols-[16rem_minmax(0,1fr)_0rem]",
+            !layout.nav && dock && "grid-cols-[4.25rem_minmax(0,1fr)_21rem] wide:grid-cols-[4.25rem_minmax(0,1fr)_24rem]",
+            !layout.nav && !dock && "grid-cols-[4.25rem_minmax(0,1fr)_0rem]",
+          )}
+        >
+          <nav aria-label="Sidebar" className={cn("flex min-h-0 flex-col overflow-hidden border-r pb-5 pt-7", layout.nav ? "px-3.5" : "items-center px-2")}>
+            <div className={cn("flex items-center pb-8", layout.nav ? "justify-between pl-3" : "flex-col gap-5")}>
+              {layout.nav ? <Wordmark /> : <WordmarkIcon />}
+              <Toggle label={layout.nav ? "Hide sidebar" : "Show sidebar"} side="right" onClick={layout.toggleNav}>
+                {layout.nav ? <PanelLeftClose /> : <PanelLeftOpen />}
+              </Toggle>
+            </div>
+            <ul className="w-full space-y-1">
+              {routes.map((r) => {
+                const on = r.id === current;
+                const item = (
                   <button
                     onClick={() => go(r.id)}
-                    aria-current={r.id === current ? "page" : undefined}
+                    aria-current={on ? "page" : undefined}
+                    aria-label={layout.nav ? undefined : r.label}
                     className={cn(
-                      "flex h-10 w-full items-center gap-3 rounded-[10px] px-3 text-left font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-                      r.id === current && "bg-signal-soft text-signal-ink hover:bg-signal-soft hover:text-signal-ink",
+                      "flex h-10 w-full items-center gap-3 rounded-[10px] text-left font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+                      layout.nav ? "px-3" : "justify-center",
+                      on && "bg-signal-soft text-signal-ink hover:bg-signal-soft hover:text-signal-ink",
                     )}
                   >
-                    <r.icon className="size-[1.1rem]" strokeWidth={1.6} aria-hidden />
-                    {r.label}
+                    <r.icon className="size-[1.1rem] shrink-0" strokeWidth={1.6} aria-hidden />
+                    {layout.nav && r.label}
                   </button>
-                </li>
-              ))}
+                );
+                return (
+                  <li key={r.id}>
+                    {layout.nav ? item : (
+                      <Tooltip>
+                        <TooltipTrigger asChild>{item}</TooltipTrigger>
+                        <TooltipContent side="right">{r.label}</TooltipContent>
+                      </Tooltip>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
-            <div className="mt-auto space-y-1 border-t px-3 pt-4">
-              <p className="truncate font-semibold">{info?.name ?? "This device"}</p>
-              <RoleChip className="flex" />
-              {info && <p className="num text-sm text-muted-foreground">{freeMib(info.free_mem_mb)}</p>}
-            </div>
+            {layout.nav ? (
+              <div className="mt-auto space-y-1 border-t px-3 pt-4">
+                <p className="truncate font-semibold">{info?.name ?? "This device"}</p>
+                <RoleChip className="flex" />
+                {info && <p className="num text-sm text-muted-foreground">{freeMib(info.free_mem_mb)}</p>}
+              </div>
+            ) : (
+              <div className="mt-auto border-t pt-4">
+                <RoleChip className="w-6 justify-center [&>span:last-child]:sr-only" />
+              </div>
+            )}
           </nav>
 
-          <main ref={main} className="min-w-0 overflow-y-auto overflow-x-clip">{screen}</main>
+          <main ref={main} className="relative min-w-0 overflow-y-auto overflow-x-clip">
+            {split && !layout.split && (
+              <div className="sticky top-0 z-10 flex h-0 justify-end overflow-visible pr-4 pt-4">
+                <Toggle label="Show how it's split" side="left" onClick={layout.toggleSplit} className="border bg-surface shadow-sm">
+                  <PanelRightOpen />
+                </Toggle>
+              </div>
+            )}
+            {screen}
+          </main>
 
-          {split && <aside aria-label="Split" className="min-h-0 overflow-y-auto overflow-x-clip border-l bg-surface px-7 pb-7 pt-10">
-            <h2 className="mb-1 font-serif text-2xl font-medium">How it's split</h2>
-            <p className="mb-5 text-sm text-muted-foreground">Live, from the devices doing the work.</p>
-            <SplitPanel />
-          </aside>}
+          <aside aria-label="Split" aria-hidden={!dock} inert={!dock || undefined}
+            className={cn("min-h-0 min-w-0 overflow-y-auto overflow-x-clip bg-surface", dock && "border-l")}>
+            {dock && (
+              <div className="px-7 pb-7 pt-10">
+                <div className="mb-1 flex items-start justify-between gap-3">
+                  <h2 className="font-serif text-2xl font-medium">How it's split</h2>
+                  <Toggle label="Hide how it's split" side="left" onClick={layout.toggleSplit} className="-mr-2 -mt-0.5">
+                    <PanelRightClose />
+                  </Toggle>
+                </div>
+                <p className="mb-5 text-sm text-muted-foreground">Live, from the devices doing the work.</p>
+                <SplitPanel />
+              </div>
+            )}
+          </aside>
         </div>
       </TooltipProvider>
     );
@@ -131,4 +186,33 @@ function useTyping() {
     };
   }, []);
   return typing;
+}
+
+/** An icon button that shows or hides a panel, with its name as a tooltip. */
+function Toggle({ label, side, onClick, className, children }: {
+  label: string; side: "left" | "right"; onClick: () => void; className?: string; children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" aria-label={label} onClick={onClick}
+          className={cn("flex size-9 shrink-0 items-center justify-center rounded-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground [&_svg]:size-[1.1rem]", className)}>
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side={side}>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function WordmarkIcon() {
+  return (
+    <svg width="24" height="22" viewBox="0 0 24 22" role="img" aria-label="distllm" className="shrink-0">
+      <rect x="5" y="0" width="14" height="3" rx="1.5" className="fill-signal" />
+      <rect x="1.5" y="4.75" width="21" height="3" rx="1.5" className="fill-signal" />
+      <rect x="0" y="9.5" width="24" height="3" rx="1.5" className="fill-foreground" />
+      <rect x="1.5" y="14.25" width="21" height="3" rx="1.5" className="fill-foreground" />
+      <rect x="5" y="19" width="14" height="3" rx="1.5" className="fill-foreground" />
+    </svg>
+  );
 }

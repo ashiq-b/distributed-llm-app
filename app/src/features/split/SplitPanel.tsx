@@ -9,6 +9,7 @@ import { UNKNOWN, mib, seconds } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { LayerColumn, toneOf } from "./LayerBands";
 import LiveStats from "./LiveStats";
+import { withPeerNames } from "./names";
 
 export default function SplitPanel() {
   const role = useRole((s) => s.role);
@@ -38,7 +39,8 @@ export default function SplitPanel() {
     );
   }
 
-  const { shares, load, model_id } = role;
+  const { load, model_id } = role;
+  const shares = withPeerNames(role.shares, peers);
   const n = Math.max(0, ...shares.map((s) => (s.layers ? s.layers[1] + 1 : 0)));
   return (
     <div className="space-y-6">

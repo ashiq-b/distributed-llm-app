@@ -76,6 +76,38 @@ export const useNav = create<{ screen: Screen; go: (s: Screen) => void }>((set) 
   },
 }));
 
+// Layout choices are per-viewer conveniences kept in this browser's storage; the app works
+// the same without it (private mode, cleared storage).
+function remembered(key: string, fallback: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    return v == null ? fallback : v === "1";
+  } catch {
+    return fallback;
+  }
+}
+function remember(key: string, on: boolean) {
+  try { localStorage.setItem(key, on ? "1" : "0"); } catch { /* storage unavailable */ }
+}
+
+/** Desktop: are the sidebar and the split dock open (both by default)? Phone: has the
+ * split sheet been opened at least once (until then its trigger says what it is)? */
+export const useLayout = create<{
+  nav: boolean;
+  split: boolean;
+  seenSplit: boolean;
+  toggleNav: () => void;
+  toggleSplit: () => void;
+  sawSplit: () => void;
+}>((set, get) => ({
+  nav: remembered("layout.nav", true),
+  split: remembered("layout.split", true),
+  seenSplit: remembered("layout.seenSplit", false),
+  toggleNav: () => { const nav = !get().nav; remember("layout.nav", nav); set({ nav }); },
+  toggleSplit: () => { const split = !get().split; remember("layout.split", split); set({ split }); },
+  sawSplit: () => { if (!get().seenSplit) { remember("layout.seenSplit", true); set({ seenSplit: true }); } },
+}));
+
 /** The last thing that went wrong, shown until dismissed or replaced. */
 export const useNotice = create<{
   error: string | null;

@@ -204,15 +204,17 @@ export default function MeshView({
           const a = tops[i];
           if (!a || size.w === 0) return <li key={n.id} className="sr-only">{n.label}{n.detail ? `, ${n.detail}` : ""}</li>;
           const side = a.x < size.w * 0.34 ? "left" : a.x > size.w * 0.66 ? "right" : "mid";
+          // Side labels sit against their own edge and take at most half the width, so
+          // the left and right ones never overlap however narrow the view.
           const style =
-            side === "left" ? { left: Math.max(6, a.x - 24), top: a.y - 10 }
-            : side === "right" ? { right: Math.max(6, size.w - a.x - 24), top: a.y - 10 }
+            side === "left" ? { left: Math.max(4, Math.min(a.x - 24, size.w * 0.5 - 160)), top: a.y - 10, maxWidth: "calc(50% - 8px)" }
+            : side === "right" ? { right: Math.max(4, Math.min(size.w - a.x - 24, size.w * 0.5 - 160)), top: a.y - 10, maxWidth: "calc(50% - 8px)" }
             : { left: a.x, top: a.y - 10, transform: "translateX(-50%)" };
           return (
             <li
               key={n.id}
               style={{ ...style, transform: `${style.transform ?? ""} translateY(-100%)`.trim() }}
-              className="absolute max-w-[46%] rounded-lg border bg-surface/95 px-2.5 py-1.5 text-left shadow-[0_1px_0_hsl(var(--border))]"
+              className="absolute max-w-[60%] rounded-lg border bg-surface/95 px-2.5 py-1.5 text-left shadow-[0_1px_0_hsl(var(--border))]"
             >
               <p className={cn("flex items-center gap-1.5 truncate text-sm font-semibold", n.self && "text-signal")}>
                 <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", n.self ? "bg-signal" : "bg-foreground/60")} />
