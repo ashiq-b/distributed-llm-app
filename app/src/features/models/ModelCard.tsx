@@ -7,7 +7,7 @@ import { modelCancelDownload, modelDelete, modelDownload, type ModelView, type R
 import { loadModel, useModels, useNav, useNotice } from "@/lib/stores";
 import { UNKNOWN, fileSize } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { fit, type Share } from "./fit";
+import { fit, splitAdvice, type Share } from "./fit";
 
 /** Why Load can't be used right now, or null if it can. Not shown for a model that isn't downloaded. */
 export function loadBlocked(m: ModelView, role: RoleState | null, shares: Share[]): string | null {
@@ -36,7 +36,7 @@ function Progress({ m }: { m: ModelView }) {
 }
 
 /** Free memory of each device as a stacked bar, with a mark where the model's need falls. */
-function FitBar({ need, shares }: { need: number; shares: Share[] }) {
+export function FitBar({ need, shares }: { need: number; shares: Share[] }) {
   const f = fit(need, shares);
   const scale = Math.max(need, f.have) * 1.08 || 1;
   const at = (mb: number) => `${(100 * mb) / scale}%`;
@@ -67,6 +67,27 @@ function FitBar({ need, shares }: { need: number; shares: Share[] }) {
         {" MiB free. The mark is what the model needs."}
       </p>
     </div>
+  );
+}
+
+/** Splitting is for models that don't fit, not for speed: say which case this is. */
+export function SplitNote({ need, shares }: { need: number; shares: Share[] }) {
+  const a = splitAdvice(need, shares);
+  if (!a) return null;
+  const workers = a.workers === 1 ? "the worker" : `each of the ${a.workers} workers`;
+  return a.kind === "fits_alone" ? (
+    <p className="mt-3 text-pretty rounded-xl border bg-foreground/[0.04] p-3 text-sm">
+      <span className="font-semibold">Fits on this device alone</span>{" "}
+      <span className="num text-muted-foreground">({a.free.toLocaleString()} MiB free, needs {a.need.toLocaleString()}).</span>{" "}
+      Splitting will be slower: every token waits for {workers} over Wi‑Fi. For speed, turn workers off in Devices.
+      Split for models too big for one device.
+    </p>
+  ) : (
+    <p className="mt-3 text-pretty rounded-xl border border-signal/35 bg-signal/[0.06] p-3 text-sm">
+      <span className="font-semibold">Too big for this device alone</span>{" "}
+      <span className="num text-muted-foreground">({a.free.toLocaleString()} MiB free, needs {a.need.toLocaleString()}),</span>{" "}
+      so the split is what lets it run. Every token waits for {workers} over Wi‑Fi, so expect it slower than a model that fits on one device.
+    </p>
   );
 }
 
@@ -111,6 +132,7 @@ export default function ModelCard({
       )}
 
       <FitBar need={m.min_free_mb} shares={shares} />
+      {ready && !loaded && <SplitNote need={m.min_free_mb} shares={shares} />}
 
       {confirmDelete ? (
         <div role="alertdialog" aria-labelledby={`del-${m.id}`} className="mt-4 rounded-xl border border-destructive/40 bg-destructive/5 p-3.5">

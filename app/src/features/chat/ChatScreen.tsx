@@ -13,6 +13,8 @@ import { LayerBar } from "@/features/split/LayerBands";
 import LiveStats from "@/features/split/LiveStats";
 import SplitView from "@/features/split/SplitView";
 import { chatHistory, chatReset, chatSend, chatStop, leaveRole, type DeviceShare } from "@/lib/tauri";
+import { FitBar, SplitNote, loadBlocked } from "@/features/models/ModelCard";
+import { useShares } from "@/features/models/useShares";
 import { chosenPeers, classify, loadModel, useChat, useLayout, useModels, useNav, useNotice, usePeers, useRole } from "@/lib/stores";
 import { toneOf } from "@/features/split/LayerBands";
 import { withPeerNames } from "@/features/split/names";
@@ -30,8 +32,12 @@ function LoadPanel() {
   const go = useNav((s) => s.go);
   const [modelId, setModelId] = useState("");
   const [busy, setBusy] = useState(false);
+  const role = useRole((s) => s.role);
+  const { shares } = useShares();
   const id = models.some((m) => m.id === modelId) ? modelId : models[0]?.id ?? "";
+  const model = models.find((m) => m.id === id);
   const chosen = peers.filter((p) => workers.includes(p.id));
+  const blocked = model ? loadBlocked(model, role, shares) : null;
 
   if (models.length === 0) {
     return (
@@ -62,13 +68,17 @@ function LoadPanel() {
             ? "Runs on this device only. Turn on workers in Devices to split it."
             : `Split across this device and ${chosen.map((p) => p.name).join(", ")}.`}
         </p>
+        {model && <FitBar need={model.min_free_mb} shares={shares} />}
+        {model && <SplitNote need={model.min_free_mb} shares={shares} />}
+        {blocked && <p id="load-blocked" className="mt-3 text-pretty text-sm text-destructive">{blocked}</p>}
       </div>
-      <Button variant="signal" className="w-full desk:w-auto" disabled={busy || !id}
+      <Button variant="signal" className="w-full desk:w-auto" disabled={busy || !id || !!blocked}
+        aria-describedby={blocked ? "load-blocked" : undefined}
         onClick={async () => {
           setBusy(true);
           try { await loadModel(id, workers); } finally { setBusy(false); }
         }}>
-        Load {models.find((m) => m.id === id)?.name}
+        Load {model?.name}
       </Button>
     </div>
   );

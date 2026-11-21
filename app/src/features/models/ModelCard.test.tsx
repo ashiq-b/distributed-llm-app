@@ -64,3 +64,17 @@ test("cancelling a download is not shown as an error; a real failure is", async 
   fireEvent.click(screen.getByRole("button", { name: "Download" }));
   await waitFor(() => expect(fail).toHaveBeenCalledWith("checksum mismatch"));
 });
+
+test("with workers on, says whether the split is needed or only slower", () => {
+  const { unmount } = card(qwen2b, [{ name: "iPhone15,4", free: 4095, self: true }, { name: "Mac", free: 12123 }]);
+  expect(screen.getByText("Fits on this device alone")).toBeInTheDocument();
+  expect(screen.getByText(/Splitting will be slower/)).toBeInTheDocument();
+  unmount();
+  card(qwen2b, [{ name: "iPhone15,4", free: 1200, self: true }, { name: "Mac", free: 12123 }]);
+  expect(screen.getByText("Too big for this device alone")).toBeInTheDocument();
+});
+
+test("no workers: no split note", () => {
+  card(qwen2b, [{ name: "iPhone15,4", free: 4095, self: true }]);
+  expect(screen.queryByText(/this device alone/)).toBeNull();
+});
