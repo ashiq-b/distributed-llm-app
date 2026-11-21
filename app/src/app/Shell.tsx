@@ -1,12 +1,13 @@
 // The frame around every screen: bottom tabs on a phone, a sidebar on desktop (≥ 900 px)
 // with the split view docked on the right while a model is loading or loaded.
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { Info, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import SplitView from "@/features/split/SplitView";
 import { useDevice, useLayout, useNav, useRole } from "@/lib/stores";
 import { freeMib } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import About from "./About";
 import Notice from "./Notice";
 import RoleChip from "./RoleChip";
 import ThemeToggle from "./ThemeToggle";
@@ -52,7 +53,10 @@ export default function Shell() {
         >
           <nav aria-label="Sidebar" className={cn("flex min-h-0 flex-col overflow-hidden border-r pb-5 pt-7", layout.nav ? "px-3.5" : "items-center px-2")}>
             <div className={cn("flex items-center pb-8", layout.nav ? "justify-between pl-3" : "flex-col gap-5")}>
-              {layout.nav ? <Wordmark /> : <WordmarkIcon />}
+              <button type="button" onClick={() => layout.setAbout(true)} aria-label="About distllm"
+                className="-m-1.5 rounded-lg p-1.5 transition-opacity hover:opacity-80">
+                {layout.nav ? <Wordmark /> : <WordmarkIcon />}
+              </button>
               <div className={cn("flex items-center", layout.nav ? "gap-1" : "flex-col-reverse gap-4")}>
                 <ThemeToggle />
                 <Toggle label={layout.nav ? "Hide sidebar" : "Show sidebar"} side="right" onClick={layout.toggleNav}>
@@ -95,9 +99,14 @@ export default function Shell() {
                 <p className="truncate font-semibold">{info?.name ?? "This device"}</p>
                 <RoleChip className="flex" />
                 {info && <p className="num text-sm text-muted-foreground">{freeMib(info.free_mem_mb)}</p>}
+                <button type="button" onClick={() => layout.setAbout(true)}
+                  className="-ml-1 mt-2 flex items-center gap-1.5 rounded-md px-1 py-0.5 text-sm text-muted-foreground transition-colors hover:text-foreground">
+                  <Info className="size-3.5" aria-hidden />About
+                </button>
               </div>
             ) : (
-              <div className="mt-auto border-t pt-4">
+              <div className="mt-auto flex flex-col items-center gap-4 border-t pt-4">
+                <Toggle label="About distllm" side="right" onClick={() => layout.setAbout(true)}><Info /></Toggle>
                 <RoleChip className="w-6 justify-center [&>span:last-child]:sr-only" />
               </div>
             )}
@@ -130,6 +139,7 @@ export default function Shell() {
             )}
           </aside>
         </div>
+        <About open={layout.about} onOpenChange={layout.setAbout} />
       </TooltipProvider>
     );
   }
@@ -138,7 +148,9 @@ export default function Shell() {
     <TooltipProvider>
       <div className="flex h-full min-w-0 flex-col">
         <header className="flex items-center justify-between gap-4 pb-2 pl-[max(1.25rem,env(safe-area-inset-left))] pr-[max(1.25rem,env(safe-area-inset-right))] pt-[calc(env(safe-area-inset-top)+0.75rem)]">
-          <Wordmark />
+          <button type="button" onClick={() => layout.setAbout(true)} aria-label="About distllm" className="-m-2 flex min-h-11 items-center rounded-lg p-2">
+            <Wordmark />
+          </button>
           <div className="flex min-w-0 items-center gap-3">
             <RoleChip className="justify-end" />
             <ThemeToggle />
@@ -172,6 +184,7 @@ export default function Shell() {
           </ul>
         </nav>
       </div>
+      <About open={layout.about} onOpenChange={layout.setAbout} />
     </TooltipProvider>
   );
 }

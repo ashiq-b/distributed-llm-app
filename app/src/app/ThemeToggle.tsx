@@ -25,7 +25,7 @@ export default function ThemeToggle({ className }: { className?: string }) {
         switchTheme(dark ? "light" : "dark", r.left + r.width / 2, r.top + r.height / 2);
       }}
       className={cn(
-        "group relative flex size-9 shrink-0 touch-manipulation items-center justify-center rounded-full border bg-surface text-foreground",
+        "group relative flex size-11 shrink-0 desk:size-9 touch-manipulation items-center justify-center rounded-full border bg-surface text-foreground",
         "transition-[transform,background-color] hover:bg-accent active:scale-90 [-webkit-tap-highlight-color:transparent]",
         className,
       )}

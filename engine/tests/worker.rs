@@ -105,6 +105,13 @@ fn reports_rpc_proto_version_of_pinned_llama_cpp() {
 }
 
 #[test]
+fn reports_the_pinned_llama_cpp() {
+    let (tag, commit) = dl_engine::llama_cpp_pin();
+    assert_eq!(tag, "v1.0.0");
+    assert_eq!(commit.len(), 40, "full commit hash, got {commit:?}");
+}
+
+#[test]
 fn reports_free_memory_of_default_device() {
     let free = dl_engine::device_free_mb().expect("free memory should be known on this Mac");
     assert!(free > 0);

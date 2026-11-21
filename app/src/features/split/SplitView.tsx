@@ -22,7 +22,9 @@ export default function SplitView() {
     const workers = peers.filter((p) => chosen.includes(p.id));
     return (
       <div className="space-y-4">
-        <MeshView className="h-56" nodes={peerNodes(workers)} trunk={`Loading ${nameOf(role.model_id)}`} />
+        {workers.length > 0
+          ? <MeshView className="h-56" nodes={peerNodes(workers)} trunk={`Loading ${nameOf(role.model_id)}`} />
+          : <p className="font-serif text-xl">Loading {nameOf(role.model_id)} on this device</p>}
         <Progress value={role.frac * 100} aria-label="Loading" />
         <p className="num text-sm text-muted-foreground">{Math.round(role.frac * 100)}%. Weights a worker already has are not sent again.</p>
       </div>

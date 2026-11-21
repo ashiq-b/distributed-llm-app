@@ -92,7 +92,7 @@ export default function ThisDeviceCard({ info }: { info: DeviceInfo | null }) {
               disabled={!checked && !allowed(c.id)}
               onClick={() => pick(c.id)}
               className={cn(
-                "h-10 touch-manipulation rounded-full text-sm font-semibold transition-colors desk:h-9",
+                "h-11 touch-manipulation rounded-full text-sm font-semibold transition-colors desk:h-9",
                 checked ? "bg-signal text-white dark:text-background" : "text-muted-foreground hover:text-foreground",
                 "disabled:cursor-not-allowed disabled:opacity-40",
                 checked && "disabled:opacity-100",

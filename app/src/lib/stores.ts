@@ -127,6 +127,9 @@ export const useLayout = create<{
   nav: boolean;
   split: boolean;
   seenSplit: boolean;
+  /** The About sheet (not remembered). */
+  about: boolean;
+  setAbout: (open: boolean) => void;
   toggleNav: () => void;
   toggleSplit: () => void;
   sawSplit: () => void;
@@ -134,6 +137,8 @@ export const useLayout = create<{
   nav: remembered("layout.nav", true),
   split: remembered("layout.split", true),
   seenSplit: remembered("layout.seenSplit", false),
+  about: false,
+  setAbout: (about) => set({ about }),
   toggleNav: () => { const nav = !get().nav; remember("layout.nav", nav); set({ nav }); },
   toggleSplit: () => { const split = !get().split; remember("layout.split", split); set({ split }); },
   sawSplit: () => { if (!get().seenSplit) { remember("layout.seenSplit", true); set({ seenSplit: true }); } },

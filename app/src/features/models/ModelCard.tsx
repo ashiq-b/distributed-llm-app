@@ -135,7 +135,7 @@ export default function ModelCard({
             <Button variant="outline" onClick={download}>{st.state === "partial" ? "Resume" : "Download"}</Button>
           )}
           {!m.downloading && st.state !== "not_downloaded" && !loaded && (
-            <Button variant="ghost" onClick={() => setConfirmDelete(true)}>Delete</Button>
+            <Button variant="outline" onClick={() => setConfirmDelete(true)}>Delete</Button>
           )}
         </div>
       )}

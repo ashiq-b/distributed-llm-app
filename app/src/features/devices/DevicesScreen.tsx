@@ -2,7 +2,7 @@
 // Pick workers here; load in Chat.
 import MeshView from "@/features/mesh/MeshView";
 import { peerNodes } from "@/features/mesh/nodes";
-import { useDevice, usePeers } from "@/lib/stores";
+import { useDevice, useLayout, usePeers } from "@/lib/stores";
 import { freeMib } from "@/lib/format";
 import AddPeerDialog from "./AddPeerDialog";
 import PeerRow from "./PeerRow";
@@ -13,6 +13,7 @@ export const EMPTY = "No devices found yet. Make sure others are on the same Wi�
 export default function DevicesScreen() {
   const info = useDevice((s) => s.info);
   const { peers, chosen, toggle } = usePeers();
+  const setAbout = useLayout((s) => s.setAbout);
 
   return (
     <div className="space-y-8">
@@ -25,7 +26,13 @@ export default function DevicesScreen() {
             trunk={info ? `${info.name}, ${freeMib(info.free_mem_mb)}` : undefined}
           />
           {peers.length === 0 && (
-            <p className="absolute inset-x-0 top-16 text-center text-sm text-muted-foreground">Looking for DistLLM on this Wi‑Fi…</p>
+            <p role="status" className="absolute inset-x-0 top-16 flex items-center justify-center gap-2.5 text-sm text-muted-foreground">
+              <span aria-hidden className="relative flex size-2">
+                <span className="absolute inset-0 rounded-full bg-signal/70 motion-safe:animate-ping" />
+                <span className="relative size-2 rounded-full bg-signal" />
+              </span>
+              Looking for DistLLM on this Wi‑Fi…
+            </p>
           )}
         </div>
       </section>
@@ -50,6 +57,13 @@ export default function DevicesScreen() {
           </ul>
         )}
       </section>
+
+      <p className="text-pretty text-sm text-muted-foreground">
+        Only use Worker on a network you trust.{" "}
+        <button type="button" onClick={() => setAbout(true)} className="font-medium text-foreground underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground">
+          About distllm and network safety
+        </button>
+      </p>
     </div>
   );
 }

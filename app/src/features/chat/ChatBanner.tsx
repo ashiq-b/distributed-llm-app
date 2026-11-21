@@ -42,7 +42,7 @@ export default function ChatBanner() {
         )}
       </div>
       <button type="button" aria-label="Dismiss" onClick={dismiss}
-        className="absolute right-2 top-2 flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground">
+        className="absolute right-1.5 top-1.5 flex size-11 items-center desk:size-9 justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground">
         <X className="size-4" aria-hidden />
       </button>
     </div>

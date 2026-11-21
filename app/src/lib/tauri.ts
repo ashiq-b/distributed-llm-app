@@ -56,6 +56,15 @@ export interface LoadReport {
   bytes_cached: number;
 }
 
+export interface About {
+  app_ver: string;
+  llama_cpp_tag: string;
+  llama_cpp_commit: string;
+  rpc_proto: string;
+}
+/** This build: app version, the pinned llama.cpp and its RPC protocol. */
+export const about = () => invoke<About>("about");
+
 export const roleState = () => invoke<RoleState>("role_state");
 export const becomeWorker = (port?: number) => invoke<RoleState>("become_worker", { port });
 /** peerIds: ids from the discovered device list; empty = this device alone. */

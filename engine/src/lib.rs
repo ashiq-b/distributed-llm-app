@@ -42,6 +42,16 @@ pub fn rpc_proto_version() -> String {
     unsafe { CStr::from_ptr(ffi::dl_rpc_proto_version()) }.to_string_lossy().into_owned()
 }
 
+/// The llama.cpp this engine is built from, as pinned in `engine/LLAMA_CPP_VERSION`:
+/// (release tag, commit). Every platform builds from the same pin.
+pub fn llama_cpp_pin() -> (&'static str, &'static str) {
+    const PIN: &str = include_str!("../LLAMA_CPP_VERSION");
+    let field = |key: &str| {
+        PIN.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix('=')).map(str::trim).unwrap_or("unknown")
+    };
+    (field("tag"), field("commit"))
+}
+
 /// Free memory (MiB) of this device's default compute device, if known.
 pub fn device_free_mb() -> Option<u64> {
     u64::try_from(unsafe { ffi::dl_device_free_mb() }).ok()

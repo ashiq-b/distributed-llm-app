@@ -84,6 +84,26 @@ pub fn device_info() -> DeviceInfo {
     read_device_info()
 }
 
+/// What this build is, for the About sheet.
+#[derive(Clone, Serialize)]
+pub struct About {
+    app_ver: String,
+    llama_cpp_tag: String,
+    llama_cpp_commit: String,
+    rpc_proto: String,
+}
+
+#[tauri::command]
+pub fn about() -> About {
+    let (tag, commit) = dl_engine::llama_cpp_pin();
+    About {
+        app_ver: env!("CARGO_PKG_VERSION").into(),
+        llama_cpp_tag: tag.into(),
+        llama_cpp_commit: commit.into(),
+        rpc_proto: dl_engine::rpc_proto_version(),
+    }
+}
+
 /// The current role and what goes with it.
 #[tauri::command]
 pub fn role_state(state: State<'_, EngineState>) -> RoleState {

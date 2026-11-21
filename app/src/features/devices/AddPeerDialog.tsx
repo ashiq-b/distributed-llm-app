@@ -34,7 +34,8 @@ export default function AddPeerDialog() {
       <DialogTrigger asChild>
         <Button variant="outline" size="sm"><Plus aria-hidden />Add by address</Button>
       </DialogTrigger>
-      <DialogContent className="w-[calc(100%-2rem)] rounded-2xl bg-surface">
+      <DialogContent className="w-[calc(100%-2rem)] rounded-2xl bg-surface"
+        onOpenAutoFocus={(e) => { e.preventDefault(); document.getElementById("addr")?.focus(); }}>
         <DialogHeader className="text-left">
           <DialogTitle className="font-serif text-2xl font-medium">Add a device</DialogTitle>
           <DialogDescription>

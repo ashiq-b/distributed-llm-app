@@ -56,7 +56,7 @@ function LoadPanel() {
         ))}
       </fieldset>
       <div>
-        <MeshView className="h-44" nodes={peerNodes(chosen)} listen={false} trunk="This device" />
+        {chosen.length > 0 && <MeshView className="h-44" nodes={peerNodes(chosen)} listen={false} trunk="This device" />}
         <p className="mt-2 text-pretty text-sm text-muted-foreground">
           {chosen.length === 0
             ? "Runs on this device only. Turn on workers in Devices to split it."
@@ -217,6 +217,8 @@ export default function ChatScreen() {
 
   const problem = useChat((s) => s.problem);
   const lastLoad = useChat((s) => s.lastLoad);
+  const models = useModels((s) => s.models);
+  const nameOf = (id: string) => models.find((m) => m.id === id)?.name ?? id;
 
   if (role?.role === "host") return <Conversation modelId={role.model_id} shares={role.shares} />;
   // A device dropped out mid-conversation: keep the conversation, wait for Reconnect.
@@ -230,7 +232,7 @@ export default function ChatScreen() {
       {role?.role === "loading" ? (
         desktop ? (
           <div className="space-y-3">
-            <p className="font-serif text-2xl">Loading {role.model_id}</p>
+            <p className="font-serif text-2xl">Loading {nameOf(role.model_id)}</p>
             <Progress value={role.frac * 100} aria-label="Loading" />
             <p className="num text-sm text-muted-foreground">{Math.round(role.frac * 100)}%</p>
           </div>
