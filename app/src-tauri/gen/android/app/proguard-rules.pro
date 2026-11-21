@@ -19,3 +19,9 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# MainActivity hands the page its insets through an anonymous JavaScript interface
+# (DistllmInsets.get / setDark); keep those methods through the release shrinker.
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
