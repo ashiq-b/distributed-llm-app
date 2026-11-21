@@ -85,6 +85,18 @@ fn main() {
         }
         println!("cargo:rustc-link-lib=c++");
     }
+    if target_os == "macos" {
+        // ggml-metal's `@available` checks call `__isPlatformVersionAtLeast`, from clang's
+        // runtime. rustc links with -nodefaultlibs, and release LTO drops std's copy, so the
+        // release link failed without it. (On iOS, Xcode's own link adds the runtime.)
+        let out = std::process::Command::new("xcrun")
+            .args(["clang", "--print-runtime-dir"])
+            .output()
+            .expect("run xcrun clang --print-runtime-dir");
+        let dir = String::from_utf8(out.stdout).unwrap();
+        println!("cargo:rustc-link-search=native={}", dir.trim());
+        println!("cargo:rustc-link-lib=static=clang_rt.osx");
+    }
     if target_os == "android" {
         // The NDK's shared C++ runtime would need shipping beside the app; link it statically.
         println!("cargo:rustc-link-lib=c++_static");
