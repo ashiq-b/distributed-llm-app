@@ -8,6 +8,7 @@ import { useDevice, useLayout, useNav, useRole } from "@/lib/stores";
 import { freeMib } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import About from "./About";
+import { KEYBOARD_EVENT, keyboardHeight } from "./insets";
 import Notice from "./Notice";
 import RoleChip from "./RoleChip";
 import ThemeToggle from "./ThemeToggle";
@@ -147,7 +148,7 @@ export default function Shell() {
   return (
     <TooltipProvider>
       <div className="flex h-full min-w-0 flex-col">
-        <header className="flex items-center justify-between gap-4 pb-2 pl-[max(1.25rem,env(safe-area-inset-left))] pr-[max(1.25rem,env(safe-area-inset-right))] pt-[calc(env(safe-area-inset-top)+0.75rem)]">
+        <header className="flex items-center justify-between gap-4 pb-2 pl-[max(1.25rem,var(--inset-left))] pr-[max(1.25rem,var(--inset-right))] pt-[calc(var(--inset-top)+0.75rem)]">
           <button type="button" onClick={() => layout.setAbout(true)} aria-label="About distllm" className="-m-2 flex min-h-11 items-center rounded-lg p-2">
             <Wordmark />
           </button>
@@ -158,6 +159,8 @@ export default function Shell() {
         </header>
 
         <main ref={main} className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-clip overscroll-contain pl-safe-l pr-safe-r">{screen}</main>
+        {/* Android's keyboard covers the page: keep the page (and the composer) above it. */}
+        <div aria-hidden className="h-[var(--inset-keyboard)] shrink-0" />
 
         {/* Out of the way while typing: the keyboard already takes half the screen. */}
         <nav aria-label="Tabs" hidden={typing} className="border-t bg-surface pb-safe-b pl-safe-l pr-safe-r">
@@ -189,20 +192,26 @@ export default function Shell() {
   );
 }
 
-/** True while a text field has focus (the on-screen keyboard is up on a phone). */
+/** True while a text field has focus (the on-screen keyboard is up on a phone). On
+ * Android, where the app knows the keyboard's height, only while it is actually up: the
+ * back gesture closes it without moving focus. */
 function useTyping() {
   const [typing, setTyping] = useState(false);
   useEffect(() => {
     const check = () => {
       const el = document.activeElement;
-      setTyping(el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit"].includes(el.type)));
+      const field = el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit"].includes(el.type));
+      const kb = keyboardHeight();
+      setTyping(field && (kb === null || kb > 0));
     };
     const later = () => setTimeout(check, 0);           // focus has moved on by then
     document.addEventListener("focusin", check);
     document.addEventListener("focusout", later);
+    window.addEventListener(KEYBOARD_EVENT, check);
     return () => {
       document.removeEventListener("focusin", check);
       document.removeEventListener("focusout", later);
+      window.removeEventListener(KEYBOARD_EVENT, check);
     };
   }, []);
   return typing;

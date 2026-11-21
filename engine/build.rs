@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 /// Minimum iOS version, matching llama.cpp's build-xcframework.sh.
 const IOS_MIN_VERSION: &str = "16.4";
+/// Minimum Android API level (Android 9).
+const ANDROID_MIN_API: u32 = 28;
 
 fn main() {
     println!("cargo:rerun-if-changed=cpp");
@@ -39,6 +41,29 @@ fn main() {
                 .define("GGML_NATIVE", "OFF")
                 .define("GGML_OPENMP", "OFF");
         }
+        "android" => {
+            // The NDK's own CMake toolchain; CPU backend only (no Metal, no Vulkan).
+            println!("cargo:rerun-if-env-changed=NDK_HOME");
+            let ndk = std::env::var("NDK_HOME")
+                .or_else(|_| std::env::var("ANDROID_NDK_HOME"))
+                .expect("set NDK_HOME to the Android NDK to build for Android");
+            let abi = match std::env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
+                "aarch64" => "arm64-v8a",
+                "arm" => "armeabi-v7a",
+                "x86_64" => "x86_64",
+                "x86" => "x86",
+                other => panic!("no Android ABI for {other}"),
+            };
+            cfg.define("CMAKE_TOOLCHAIN_FILE", Path::new(&ndk).join("build/cmake/android.toolchain.cmake"))
+                .define("ANDROID_ABI", abi)
+                .define("ANDROID_PLATFORM", format!("android-{ANDROID_MIN_API}"))
+                .define("GGML_NATIVE", "OFF")
+                .define("GGML_OPENMP", "OFF");
+            if abi == "arm64-v8a" {
+                // Dot-product and fp16 arithmetic: every arm64 phone from the last several years.
+                cfg.define("GGML_CPU_ARM_ARCH", "armv8.2-a+dotprod+fp16");
+            }
+        }
         _ => {}
     }
     let dst = cfg.build();
@@ -59,6 +84,12 @@ fn main() {
             println!("cargo:rustc-link-lib=framework={fw}");
         }
         println!("cargo:rustc-link-lib=c++");
+    }
+    if target_os == "android" {
+        // The NDK's shared C++ runtime would need shipping beside the app; link it statically.
+        println!("cargo:rustc-link-lib=c++_static");
+        println!("cargo:rustc-link-lib=c++abi");
+        println!("cargo:rustc-link-lib=log");
     }
 }
 

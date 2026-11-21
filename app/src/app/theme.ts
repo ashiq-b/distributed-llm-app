@@ -2,6 +2,8 @@
 // theme.css key off data-theme on <html>. Switching reveals the new theme as a circle
 // growing from the button (View Transitions); without that API, or with reduced motion,
 // it switches at once.
+import { systemBarsFor } from "./insets";
+
 export type Theme = "dark" | "light";
 
 const KEY = "theme";
@@ -19,6 +21,7 @@ export const currentTheme = (): Theme => (document.documentElement.dataset.theme
 function apply(theme: Theme) {
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.colorScheme = theme;
+  systemBarsFor(theme);
   try { localStorage.setItem(KEY, theme); } catch { /* storage unavailable: still switches */ }
 }
 

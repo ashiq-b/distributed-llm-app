@@ -2,10 +2,12 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import Crashed from "./app/Crashed";
 import Shell from "./app/Shell";
+import { initInsets } from "./app/insets";
 import { initTheme } from "./app/theme";
 import { connectStores } from "./lib/stores";
 import "./app/theme.css";
 
+initInsets();
 initTheme();
 connectStores();
 

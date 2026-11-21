@@ -117,7 +117,7 @@ function SplitSheet({ shares: raw }: { shares: DeviceShare[] }) {
           </span>
         </button>
       </SheetTrigger>
-      <SheetContent side="bottom" className="max-h-[88dvh] overflow-y-auto rounded-t-3xl bg-surface pb-[calc(env(safe-area-inset-bottom)+1.5rem)]">
+      <SheetContent side="bottom" className="max-h-[88dvh] overflow-y-auto rounded-t-3xl bg-surface pb-[calc(var(--inset-bottom)+1.5rem)]">
         <SheetHeader className="mb-2 text-left">
           <SheetTitle className="font-serif text-2xl font-medium">How it's split</SheetTitle>
           <SheetDescription>Live, from the devices doing the work.</SheetDescription>
@@ -165,7 +165,7 @@ function Conversation({ modelId, shares: raw }: { modelId: string; shares: Devic
   };
 
   return (
-    <div className="flex min-h-[calc(100dvh-10rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] flex-col desk:min-h-[calc(100dvh-4.5rem)]">
+    <div className="flex min-h-[calc(100dvh-10rem-var(--inset-top)-var(--inset-bottom))] flex-col desk:min-h-[calc(100dvh-4.5rem)]">
       <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
         <div className="min-w-0">
           <h1 className="text-balance break-words font-serif text-3xl font-medium tracking-tight desk:text-4xl">{name}</h1>

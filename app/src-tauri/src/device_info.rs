@@ -93,7 +93,27 @@ fn hardware_model() -> Option<String> {
     }
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "macos")))]
+/// Maker and model from the system properties ("Google Pixel 8"); the maker is left off
+/// when the model already starts with it ("samsung SM-S911B" stays as is).
+#[cfg(target_os = "android")]
+fn hardware_model() -> Option<String> {
+    fn prop(key: &std::ffi::CStr) -> Option<String> {
+        let mut buf = [0 as libc::c_char; 92]; // PROP_VALUE_MAX
+        let n = unsafe { libc::__system_property_get(key.as_ptr(), buf.as_mut_ptr()) };
+        if n <= 0 {
+            return None;
+        }
+        let s = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_string_lossy().trim().to_string();
+        (!s.is_empty()).then_some(s)
+    }
+    let model = prop(c"ro.product.model")?;
+    Some(match prop(c"ro.product.manufacturer") {
+        Some(maker) if !model.to_lowercase().starts_with(&maker.to_lowercase()) => format!("{maker} {model}"),
+        _ => model,
+    })
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
 fn hardware_model() -> Option<String> {
     None
 }

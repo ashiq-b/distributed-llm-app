@@ -61,7 +61,7 @@ export default function About({ open, onOpenChange }: { open: boolean; onOpenCha
   }
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="bottom" className="max-h-[88dvh] overflow-y-auto rounded-t-3xl bg-surface pb-[calc(env(safe-area-inset-bottom)+1.5rem)]">
+      <SheetContent side="bottom" className="max-h-[88dvh] overflow-y-auto rounded-t-3xl bg-surface pb-[calc(var(--inset-bottom)+1.5rem)]">
         <SheetHeader className="mb-4 text-left">
           <SheetTitle className="text-lg">{title}<span className="sr-only">About</span></SheetTitle>
           <SheetDescription className="text-pretty">{INTRO}</SheetDescription>

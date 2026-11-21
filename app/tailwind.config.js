@@ -52,10 +52,10 @@ export default {
         "4xl": ["2.75rem", { lineHeight: "3rem" }],
       },
       spacing: {
-        "safe-t": "env(safe-area-inset-top)",
-        "safe-b": "env(safe-area-inset-bottom)",
-        "safe-l": "env(safe-area-inset-left)",
-        "safe-r": "env(safe-area-inset-right)",
+        "safe-t": "var(--inset-top)",
+        "safe-b": "var(--inset-bottom)",
+        "safe-l": "var(--inset-left)",
+        "safe-r": "var(--inset-right)",
       },
       keyframes: {
         sweep: { from: { transform: "translateX(-2.5rem)" }, to: { transform: "translateX(calc(100vw))" } },

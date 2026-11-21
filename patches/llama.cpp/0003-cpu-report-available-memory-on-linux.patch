@@ -1,0 +1,34 @@
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.cpp b/ggml/src/ggml-cpu/ggml-cpu.cpp
+index 2978340..aa1eec1 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.cpp
++++ b/ggml/src/ggml-cpu/ggml-cpu.cpp
+@@ -7,6 +7,7 @@
+ #include "amx/amx.h"
+ 
+ #include <cctype>
++#include <cstdio> // [distllm patch]
+ #include <string>
+ #include <vector>
+ 
+@@ -376,6 +377,21 @@ static void ggml_backend_cpu_device_get_memory(ggml_backend_dev_t dev, size_t *
+ 
+     // "free" system memory is ill-defined, for practical purposes assume that all of it is free:
+     *free = *total;
++#if defined(__linux__)
++    // [distllm patch] Linux and Android: report what the kernel says can be used without
++    // swapping (MemAvailable), not the whole of RAM. A phone uses much of it for other apps.
++    if (FILE * f = fopen("/proc/meminfo", "r")) {
++        char line[128];
++        unsigned long long kib = 0;
++        while (fgets(line, sizeof(line), f)) {
++            if (sscanf(line, "MemAvailable: %llu kB", &kib) == 1) {
++                *free = (size_t) kib * 1024;
++                break;
++            }
++        }
++        fclose(f);
++    }
++#endif
+ #endif // _WIN32
+ 
+     GGML_UNUSED(dev);

@@ -61,7 +61,7 @@ impl Host {
             (Err(e), _) => return Err(release(e)),
             (_, Err(_)) => return Err(release(EngineError::Connect("endpoint contains NUL".into()))),
         };
-        let ep_ptrs: Vec<*const i8> = eps.iter().map(|c| c.as_ptr()).collect();
+        let ep_ptrs: Vec<*const std::ffi::c_char> = eps.iter().map(|c| c.as_ptr()).collect();
 
         let started = Instant::now();
         let mut progress: &mut dyn FnMut(f32) = &mut on_progress;

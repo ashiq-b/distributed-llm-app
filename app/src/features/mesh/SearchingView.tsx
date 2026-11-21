@@ -75,7 +75,9 @@ export default function SearchingView({ trunk, className }: { trunk?: string; cl
     const start = performance.now();
 
     const draw = (now: number) => {
-      const t = still ? 1200 : now - start;
+      // A frame's timestamp can be a little before `start` (it is when the frame began),
+      // and a negative time would give rings a negative radius, which canvas rejects.
+      const t = still ? 1200 : Math.max(0, now - start);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
       ctx.lineCap = "round";
