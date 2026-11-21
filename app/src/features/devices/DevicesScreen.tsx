@@ -1,6 +1,7 @@
 // This device and the others on the network, drawn as the mesh they would form.
 // Pick workers here; load in Chat.
 import MeshView from "@/features/mesh/MeshView";
+import SearchingView from "@/features/mesh/SearchingView";
 import { peerNodes } from "@/features/mesh/nodes";
 import { useDevice, useLayout, usePeers } from "@/lib/stores";
 import { freeMib } from "@/lib/format";
@@ -20,19 +21,14 @@ export default function DevicesScreen() {
       <section>
         <h1 className="font-serif text-4xl font-medium tracking-tight">Devices</h1>
         <div className="relative mt-2">
-          <MeshView
-            className="h-72 desk:h-80"
-            nodes={peerNodes(peers)}
-            trunk={info ? `${info.name}, ${freeMib(info.free_mem_mb)}` : undefined}
-          />
-          {peers.length === 0 && (
-            <p role="status" className="absolute inset-x-0 top-16 flex items-center justify-center gap-2.5 text-sm text-muted-foreground">
-              <span aria-hidden className="relative flex size-2">
-                <span className="absolute inset-0 rounded-full bg-signal/70 motion-safe:animate-ping" />
-                <span className="relative size-2 rounded-full bg-signal" />
-              </span>
-              Looking for DistLLM on this Wi‑Fi…
-            </p>
+          {peers.length === 0 ? (
+            <SearchingView className="h-72 desk:h-80" trunk={info ? `${info.name}, ${freeMib(info.free_mem_mb)}` : undefined} />
+          ) : (
+            <MeshView
+              className="h-72 desk:h-80"
+              nodes={peerNodes(peers)}
+              trunk={info ? `${info.name}, ${freeMib(info.free_mem_mb)}` : undefined}
+            />
           )}
         </div>
       </section>
