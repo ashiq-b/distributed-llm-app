@@ -1,5 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import * as tauri from "@/lib/tauri";
 import type { ModelView, RoleState } from "@/lib/tauri";
+import { useModels, useNotice } from "@/lib/stores";
 import ModelCard from "./ModelCard";
 import type { Share } from "./fit";
 
@@ -37,4 +39,28 @@ test("a worker can't load, and is told how to", () => {
   card(qwen2b, [{ name: "Mac", free: 12100, self: true }],
     { role: "worker", status: { running: true, endpoint: "0.0.0.0:50052", device: "MTL0", free_mb: 12000 } });
   expect(screen.getByRole("button", { name: "Load" })).toHaveAccessibleDescription(/Switch it to Idle in Devices/);
+});
+
+vi.mock("@/lib/tauri", async (orig) => ({
+  ...(await orig<typeof import("@/lib/tauri")>()),
+  modelDownload: vi.fn(),
+}));
+
+test("cancelling a download is not shown as an error; a real failure is", async () => {
+  const fail = vi.fn();
+  useNotice.setState({ fail });
+  useModels.setState({ refresh: vi.fn() });
+  const fresh = { ...qwen2b, status: { state: "not_downloaded" as const } };
+
+  vi.mocked(tauri.modelDownload).mockRejectedValueOnce("download cancelled");
+  const { unmount } = card(fresh, [{ name: "Mac", free: 12100, self: true }]);
+  fireEvent.click(screen.getByRole("button", { name: "Download" }));
+  await waitFor(() => expect(useModels.getState().refresh).toHaveBeenCalled());
+  expect(fail).not.toHaveBeenCalled();
+  unmount();
+
+  vi.mocked(tauri.modelDownload).mockRejectedValueOnce("checksum mismatch");
+  card(fresh, [{ name: "Mac", free: 12100, self: true }]);
+  fireEvent.click(screen.getByRole("button", { name: "Download" }));
+  await waitFor(() => expect(fail).toHaveBeenCalledWith("checksum mismatch"));
 });

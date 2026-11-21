@@ -834,6 +834,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-bonjour-ios",
+ "tauri-plugin-multicast-android",
  "tauri-plugin-opener",
  "thiserror 2.0.21",
  "ureq",
@@ -3854,6 +3855,15 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-bonjour-ios"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tauri",
+ "tauri-plugin",
+]
+
+[[package]]
+name = "tauri-plugin-multicast-android"
 version = "0.1.0"
 dependencies = [
  "serde",

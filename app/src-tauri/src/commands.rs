@@ -311,14 +311,21 @@ fn index_local_models(app: &AppHandle) {
 }
 
 /// Keep the screen on while this device is a worker or has a model loaded: a locked
-/// iPhone suspends the app and drops its connections. Desktop: nothing to do.
-/// Never call it on the main thread (the iOS plugin call waits for the main thread).
+/// phone suspends the app and drops its connections. Desktop: nothing to do.
+/// Never call it on the main thread (the mobile plugin calls wait for the main thread).
 fn update_keep_awake(app: &AppHandle) {
     let state = app.state::<EngineState>();
     let busy = state.worker.lock().unwrap().is_some() || state.host.lock().unwrap().is_some();
     #[cfg(target_os = "ios")]
     discovery::bonjour::set_keep_awake(app, busy);
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_multicast_android::MulticastExt;
+        if let Err(e) = app.multicast().call::<serde_json::Value>("setKeepAwake", serde_json::json!({ "enabled": busy })) {
+            eprintln!("keep-awake failed: {e}");
+        }
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
     let _ = busy;
 }
 
@@ -342,6 +349,13 @@ fn emit_peers(app: &AppHandle, peers: Vec<discovery::PeerInfo>) {
 pub async fn discovery_start(app: AppHandle) -> Result<Vec<PeerView>, String> {
     blocking(move || {
         let discovery = app.state::<Discovery>();
+        // Android drops incoming multicast (mDNS) unless the app holds a multicast lock.
+        // Discovery runs for the app's whole life, so the lock is held from here on.
+        #[cfg(target_os = "android")]
+        {
+            use tauri_plugin_multicast_android::MulticastExt;
+            app.multicast().call::<serde_json::Value>("setMulticast", serde_json::json!({ "enabled": true }))?;
+        }
         let backend = discovery.backend(&app)?;
         let emitter = app.clone();
         backend.browse(move |peers, heard| {

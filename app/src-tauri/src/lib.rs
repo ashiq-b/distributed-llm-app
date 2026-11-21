@@ -12,6 +12,8 @@ pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
     #[cfg(target_os = "ios")]
     let builder = builder.plugin(tauri_plugin_bonjour_ios::init());
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(tauri_plugin_multicast_android::init());
     builder
         .manage(commands::EngineState::default())
         .manage(commands::DownloadState::default())

@@ -204,12 +204,15 @@ export default function MeshView({
           const a = tops[i];
           if (!a || size.w === 0) return <li key={n.id} className="sr-only">{n.label}{n.detail ? `, ${n.detail}` : ""}</li>;
           const side = a.x < size.w * 0.34 ? "left" : a.x > size.w * 0.66 ? "right" : "mid";
+          // The label sits above its anchor; in a short view that would push it out of
+          // the top, so it never goes higher than its own height (two lines, or one).
+          const top = Math.max(a.y - 10, n.detail ? 54 : 34);
           // Side labels sit against their own edge and take at most half the width, so
           // the left and right ones never overlap however narrow the view.
           const style =
-            side === "left" ? { left: Math.max(4, Math.min(a.x - 24, size.w * 0.5 - 160)), top: a.y - 10, maxWidth: "calc(50% - 8px)" }
-            : side === "right" ? { right: Math.max(4, Math.min(size.w - a.x - 24, size.w * 0.5 - 160)), top: a.y - 10, maxWidth: "calc(50% - 8px)" }
-            : { left: a.x, top: a.y - 10, transform: "translateX(-50%)" };
+            side === "left" ? { left: Math.max(4, Math.min(a.x - 24, size.w * 0.5 - 160)), top, maxWidth: "calc(50% - 8px)" }
+            : side === "right" ? { right: Math.max(4, Math.min(size.w - a.x - 24, size.w * 0.5 - 160)), top, maxWidth: "calc(50% - 8px)" }
+            : { left: a.x, top, transform: "translateX(-50%)" };
           return (
             <li
               key={n.id}

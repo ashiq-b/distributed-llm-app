@@ -35,3 +35,6 @@ mdns-sd = "0.22.0"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 tauri-plugin-bonjour-ios = { path = "plugins/bonjour-ios" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-multicast-android = { path = "plugins/multicast-android" }

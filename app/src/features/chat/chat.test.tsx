@@ -86,3 +86,15 @@ test("out of memory on load shows its banner with Choose devices", async () => {
   expect(screen.getByRole("button", { name: "Choose devices" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
 });
+
+test("pressing Send keeps the keyboard up: the field keeps focus", () => {
+  const onSend = vi.fn();
+  render(<Composer sending={false} desktop={false} onSend={onSend} onStop={() => {}} />);
+  const field = screen.getByLabelText("Message");
+  fireEvent.change(field, { target: { value: "hello" } });
+  field.focus();
+  const send = screen.getByRole("button", { name: "Send" });
+  expect(fireEvent.mouseDown(send)).toBe(false); // default (moving focus) prevented
+  fireEvent.click(send);
+  expect(onSend).toHaveBeenCalledWith("hello", false);
+});

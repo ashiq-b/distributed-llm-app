@@ -11,12 +11,15 @@ std::mutex  g_mu;
 std::string g_partial;
 snapshot    g_snap;
 
-// "MTL0_Mapped" -> "MTL0", "CPU" -> "CPU". RPC buffer names are kept whole
+// "MTL0_Mapped" -> "MTL0", "CPU_REPACK" -> "CPU" (weights laid out for the CPU's own
+// instructions; Android), "CPU" -> "CPU". RPC buffer names are kept whole
 // ("RPC0[127.0.0.1:50052]"): their number is the device index on that server,
 // not the process-wide RPC device name, so the endpoint is needed to match them.
 std::string device_of_buffer(std::string name) {
     if (name.find('[') != std::string::npos) return name;
-    if (auto p = name.find("_Mapped"); p != std::string::npos) name.resize(p);
+    for (const char * suffix : {"_Mapped", "_REPACK"}) {
+        if (auto p = name.find(suffix); p != std::string::npos) name.resize(p);
+    }
     return name;
 }
 

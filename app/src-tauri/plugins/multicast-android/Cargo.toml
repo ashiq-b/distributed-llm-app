@@ -1,0 +1,14 @@
+[package]
+name = "tauri-plugin-multicast-android"
+version = "0.1.0"
+description = "Android Wi-Fi multicast lock (for mDNS discovery) and keep-awake for DistLLM"
+edition = "2024"
+publish = false
+links = "tauri-plugin-multicast-android"
+
+[dependencies]
+tauri = "2"
+serde = "1"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

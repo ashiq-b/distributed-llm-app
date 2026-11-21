@@ -3,6 +3,7 @@
 
 #include "ggml-backend.h"
 #include "ggml-rpc.h"
+#include "gguf.h"
 #include "llama.h"
 
 #include <arpa/inet.h>
@@ -287,6 +288,37 @@ void unload_locked() {
 
 } // namespace
 
+namespace {
+
+// The model's layer count ("<arch>.block_count"), read from the file's header; 0 if unknown.
+uint32_t block_count(const char * model_path) {
+    gguf_init_params gp = {/* no_alloc */ true, /* ctx */ nullptr};
+    gguf_context * g = gguf_init_from_file(model_path, gp);
+    if (!g) return 0;
+    uint32_t n = 0;
+    const int64_t arch = gguf_find_key(g, "general.architecture");
+    if (arch >= 0) {
+        const int64_t k = gguf_find_key(g, (std::string(gguf_get_val_str(g, arch)) + ".block_count").c_str());
+        if (k >= 0 && gguf_get_kv_type(g, k) == GGUF_TYPE_UINT32) n = gguf_get_val_u32(g, k);
+    }
+    gguf_free(g);
+    return n;
+}
+
+// How many of `layers` the workers should hold when this host has no GPU (Android): in
+// proportion to free memory, as llama.cpp splits between GPUs. The rest, the first
+// layers, run on this device's CPU, and the host keeps the output layer.
+int32_t worker_layers(uint32_t layers, const std::vector<host_device> & remote, ggml_backend_dev_t cpu) {
+    double remote_free = 0;
+    for (const auto & d : remote) remote_free += std::max(0LL, free_mib(d.dev));
+    const double local_free = std::max(0LL, free_mib(cpu));
+    if (layers == 0 || remote_free + local_free <= 0) return 999;
+    const auto n = (int32_t) std::lround(layers * remote_free / (remote_free + local_free));
+    return std::clamp<int32_t>(n, 1, (int32_t) layers);
+}
+
+} // namespace
+
 extern "C" int dl_host_load(const char * model_path, const char ** endpoints, int n_endpoints,
                             const float * tensor_split, dl_progress_cb cb, void * user) {
     if (!model_path || n_endpoints < 0 || (n_endpoints > 0 && !endpoints)) return DL_ERR_ARGS;
@@ -310,18 +342,32 @@ extern "C" int dl_host_load(const char * model_path, const char ** endpoints, in
             devs.push_back({ggml_backend_reg_dev_get(reg, d), endpoints[i], d});
         }
     }
+    bool local_gpu = false;
     for (ggml_backend_dev_t dev : default_devices()) {
-        if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) devs.push_back({dev, ""});
+        if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+            devs.push_back({dev, ""});
+            local_gpu = true;
+        }
     }
 
     std::vector<ggml_backend_dev_t> dev_list;
     for (auto & d : devs) dev_list.push_back(d.dev);
     dev_list.push_back(nullptr);
 
+    // A host without a GPU (Android) runs its layers on the CPU, and would hand every layer
+    // to the workers and do nothing itself. Keep its share on its CPU instead, and list the
+    // CPU as this device's share (also when it runs the whole model alone).
+    int32_t gpu_layers = 999;
+    ggml_backend_dev_t cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (!local_gpu && cpu) {
+        if (!devs.empty() && !tensor_split) gpu_layers = worker_layers(block_count(model_path), devs, cpu);
+        devs.push_back({cpu, ""});
+    }
+
     progress_ctx pctx{cb, user};
     llama_model_params params = llama_model_default_params();
     params.devices                     = dev_list.data();
-    params.n_gpu_layers                = 999;
+    params.n_gpu_layers                = gpu_layers;
     params.split_mode                  = LLAMA_SPLIT_MODE_LAYER;
     params.tensor_split                = tensor_split;
     params.progress_callback           = progress_trampoline;

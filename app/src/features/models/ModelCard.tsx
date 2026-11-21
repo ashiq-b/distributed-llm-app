@@ -84,7 +84,8 @@ export default function ModelCard({
   const partialPct = st.state === "partial" ? Math.floor((100 * st.bytes) / m.size_bytes) : 0;
 
   const download = () => {
-    modelDownload(m.id).catch(fail).finally(refresh);
+    // Cancel is the user's own choice, not a failure: the card already shows it paused.
+    modelDownload(m.id).catch((e) => { if (!/cancelled/i.test(String(e))) fail(e); }).finally(refresh);
     setTimeout(refresh, 300);
   };
   const load = () => {

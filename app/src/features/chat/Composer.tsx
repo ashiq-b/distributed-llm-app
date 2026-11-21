@@ -52,9 +52,12 @@ export default function Composer({
             Think first
           </label>
           {sending ? (
-            <Button type="button" variant="outline" size="icon" aria-label="Stop" onClick={onStop}><Square className="fill-current" /></Button>
+            <Button type="button" variant="outline" size="icon" aria-label="Stop" onClick={onStop} onMouseDown={(e) => e.preventDefault()}><Square className="fill-current" /></Button>
           ) : (
-            <Button type="submit" variant="signal" size="icon" aria-label="Send" disabled={disabled || !text.trim()}><ArrowUp /></Button>
+            // Pressing Send mustn't take focus from the field: on Android the keyboard
+            // would close mid-tap, the composer would drop, and the tap would miss.
+            <Button type="submit" variant="signal" size="icon" aria-label="Send" disabled={disabled || !text.trim()}
+              onMouseDown={(e) => e.preventDefault()}><ArrowUp /></Button>
           )}
         </div>
       </div>
